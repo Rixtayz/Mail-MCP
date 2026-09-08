@@ -13,6 +13,15 @@ export interface MessageSummary {
   preview: string;
 }
 
+/** Strip invisible filler characters newsletters use for preview padding, collapse whitespace. */
+export function cleanPreview(text: string, max = 200): string {
+  return text
+    .replace(/[\u00AD\u034F\u061C\u180E\u200B-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3164\uFEFF\uFFA0]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
 export function summarizeMessage(m: GraphMessage): MessageSummary {
   return {
     id: m.id,
@@ -21,7 +30,7 @@ export function summarizeMessage(m: GraphMessage): MessageSummary {
     subject: m.subject ?? "(sans objet)",
     receivedDateTime: m.receivedDateTime ?? "",
     isRead: m.isRead ?? false,
-    preview: (m.bodyPreview ?? "").replace(/\s+/g, " ").trim().slice(0, 200),
+    preview: cleanPreview(m.bodyPreview ?? ""),
   };
 }
 
@@ -35,6 +44,9 @@ export function bodyToText(body: GraphMessage["body"]): string {
       { selector: "img", format: "skip" },
       { selector: "style", format: "skip" },
       { selector: "script", format: "skip" },
+      { selector: "h1", options: { uppercase: false } },
+      { selector: "h2", options: { uppercase: false } },
+      { selector: "h3", options: { uppercase: false } },
       { selector: "a", options: { ignoreHref: false, hideLinkHrefIfSameAsText: true } },
     ],
   })

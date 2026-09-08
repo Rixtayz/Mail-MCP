@@ -6,13 +6,18 @@ import { ok, run } from "./shared.js";
 const OutcomeSchema = z.object({
   succeeded: z.number(),
   failed: z.array(z.object({ id: z.string(), error: z.string() })),
+  moved: z.array(z.object({ id: z.string(), newId: z.string() })).optional(),
 });
 
 function summarizeOutcomes(outcomes: ActionOutcome[], verb: string) {
   const failed = outcomes.filter((o) => !o.ok).map((o) => ({ id: o.id, error: o.error ?? "inconnu" }));
   const succeeded = outcomes.length - failed.length;
-  const text = `${succeeded} message(s) ${verb}.` + (failed.length ? ` ${failed.length} échec(s) : ${failed.map((f) => `${f.id.slice(0, 12)}… (${f.error})`).join(", ")}` : "");
-  return { text, structured: { succeeded, failed } };
+  const moved = outcomes.filter((o) => o.ok && o.newId).map((o) => ({ id: o.id, newId: o.newId! }));
+  const text =
+    `${succeeded} message(s) ${verb}.` +
+    (failed.length ? ` ${failed.length} échec(s) : ${failed.map((f) => `${f.id.slice(0, 12)}… (${f.error})`).join(", ")}` : "") +
+    (moved.length ? " Les ids ont changé (voir `moved`) : les anciens ids ne sont plus valides." : "");
+  return { text, structured: { succeeded, failed, ...(moved.length ? { moved } : {}) } };
 }
 
 const Ids = z.array(z.string().min(1)).min(1).max(500).describe("Ids de messages (1 à 500)");
@@ -24,6 +29,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
       title: "Déplacer des messages",
       description:
         "Déplace un ou plusieurs messages (jusqu'à 500 ids) vers un dossier (nom, chemin ou id). Utilisé pour classer. " +
+        "ATTENTION : Outlook attribue un nouvel id à chaque message déplacé ; le résultat `moved` donne la correspondance ancien → nouveau id. " +
         "Pour déplacer tous les messages d'un expéditeur, préférez mail_bulk_by_sender.",
       inputSchema: z.object({ ids: Ids, folder: z.string().min(1).describe("Dossier de destination") }).strict(),
       outputSchema: OutcomeSchema,
@@ -43,7 +49,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     {
       title: "Supprimer des messages",
       description:
-        "Supprime un ou plusieurs messages (jusqu'à 500 ids). Par défaut les messages vont dans Éléments supprimés (récupérable). " +
+        "Supprime un ou plusieurs messages (jusqu'à 500 ids). Par défaut les messages vont dans Éléments supprimés (récupérable via mail_search folder=deleteditems puis mail_move ; leur id change). " +
         "`permanent: true` supprime définitivement : à n'utiliser que sur demande explicite de l'utilisateur.",
       inputSchema: z
         .object({

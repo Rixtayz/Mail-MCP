@@ -44,6 +44,8 @@ export interface SenderStats {
 export interface ActionOutcome {
   id: string;
   ok: boolean;
+  /** New id of the message after a move (Outlook ids change when the folder changes). */
+  newId?: string;
   error?: string;
 }
 
@@ -267,7 +269,10 @@ export class MailService {
     const responses = await this.graph.batch(reqs);
     return responses.map((r) => {
       const ok = r.status >= 200 && r.status < 300;
-      if (ok) return { id: r.id, ok };
+      if (ok) {
+        const newId = (r.body as GraphMessage | undefined)?.id;
+        return newId && newId !== r.id ? { id: r.id, ok, newId } : { id: r.id, ok };
+      }
       const body = r.body as { error?: { code?: string; message?: string } } | undefined;
       const detail = body?.error?.code ?? body?.error?.message ?? `HTTP ${r.status}`;
       return { id: r.id, ok, error: detail };
@@ -281,14 +286,14 @@ export class MailService {
     );
   }
 
+  /**
+   * Soft delete = move to the Deleted Items folder (visible in Outlook, restorable).
+   * Graph's DELETE would instead put the item in Recoverable Items, invisible to the user, so it is not used.
+   * Permanent = permanentDelete (irreversible).
+   */
   async delete(ids: string[], permanent: boolean): Promise<ActionOutcome[]> {
-    return this.runBatch(
-      ids.map((id) =>
-        permanent
-          ? { id, method: "POST" as const, url: `/me/messages/${encodeURIComponent(id)}/permanentDelete` }
-          : { id, method: "DELETE" as const, url: `/me/messages/${encodeURIComponent(id)}` },
-      ),
-    );
+    if (!permanent) return this.move(ids, "deleteditems");
+    return this.runBatch(ids.map((id) => ({ id, method: "POST" as const, url: `/me/messages/${encodeURIComponent(id)}/permanentDelete` })));
   }
 
   /** Collect every message id from a sender in a folder. */

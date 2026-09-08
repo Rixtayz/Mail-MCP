@@ -96,28 +96,28 @@ describe("MailService actions", () => {
         const reqs = JSON.parse(init.body as string).requests as { id: string; url: string; body: { destinationId: string } }[];
         expect(reqs[0]?.url).toContain("/move");
         expect(reqs[0]?.body.destinationId).toBe(folders.value[1]!.id);
-        return { responses: reqs.map((r, i) => (i === 1 ? { id: r.id, status: 404, body: { error: { code: "ErrorItemNotFound" } } } : { id: r.id, status: 201 })) };
+        return { responses: reqs.map((r, i) => (i === 1 ? { id: r.id, status: 404, body: { error: { code: "ErrorItemNotFound" } } } : { id: r.id, status: 201, body: { id: "NEW_" + r.id } })) };
       }
       return folders;
     });
     const out = await mail.move(["a", "b"], "Factures");
-    expect(out).toEqual([{ id: "a", ok: true }, { id: "b", ok: false, error: "ErrorItemNotFound" }]);
+    expect(out).toEqual([{ id: "a", ok: true, newId: "NEW_a" }, { id: "b", ok: false, error: "ErrorItemNotFound" }]);
     expect(calls.some((c) => c.url.endsWith("/$batch"))).toBe(true);
   });
 
-  it("delete uses DELETE by default and permanentDelete when asked", async () => {
+  it("delete moves to deleteditems by default and uses permanentDelete when asked", async () => {
     const seen: string[] = [];
     const { mail } = service((url, init) => {
       if (url.endsWith("/$batch")) {
         const reqs = JSON.parse(init.body as string).requests as { id: string; method: string; url: string }[];
-        for (const r of reqs) seen.push(`${r.method} ${r.url}`);
+        for (const r of reqs) seen.push(`${r.method} ${r.url}${(r as { body?: { destinationId?: string } }).body?.destinationId ? " -> " + (r as { body: { destinationId: string } }).body.destinationId : ""}`);
         return { responses: reqs.map((r) => ({ id: r.id, status: 204 })) };
       }
       return {};
     });
     await mail.delete(["x"], false);
     await mail.delete(["y"], true);
-    expect(seen).toEqual(["DELETE /me/messages/x", "POST /me/messages/y/permanentDelete"]);
+    expect(seen).toEqual(["POST /me/messages/x/move -> deleteditems", "POST /me/messages/y/permanentDelete"]);
   });
 });
 

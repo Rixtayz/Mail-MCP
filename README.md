@@ -108,4 +108,5 @@ Structure : `src/auth.ts` (MSAL, cache fichier), `src/graph.ts` (fetch + retry 4
 
 - Throttling Microsoft : 10 000 requêtes / 10 min par boîte et 4 requêtes concurrentes ; le serveur sérialise les lots et réessaie sur 429.
 - `mail_search` avec `query` (plein texte) ne se combine pas avec les autres filtres (limitation Graph) et plafonne à environ 250 résultats.
+- Une suppression normale est un déplacement vers « Éléments supprimés » (l'appel `DELETE` de Graph enverrait le message dans la zone « Éléments récupérables », invisible dans Outlook). Les ids des messages changent à chaque changement de dossier ; `mail_move` renvoie la correspondance.
 - Le désabonnement réel dépend de l'expéditeur : le un-clic et le `mailto:` envoient la demande, la radiation effective est de son ressort.
