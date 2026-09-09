@@ -4,6 +4,8 @@ A small, focused [MCP](https://modelcontextprotocol.io) server that lets Claude 
 
 Built for one job: clean up an overflowing personal inbox with an AI assistant, safely.
 
+![Mail-MCP: an assistant sorting an overflowing inbox into folders](https://raw.githubusercontent.com/Rixtayz/Mail-MCP/main/docs/screenshot.png)
+
 ## Tools
 
 Nine tools, all prefixed `mail_`:
@@ -49,17 +51,24 @@ No Azure subscription is needed for a public client app.
 
 No client secret is created: the server is a public client using the authorization code flow with PKCE.
 
-## 2. Install and sign in
+## 2. Sign in
+
+No install needed, `npx` fetches the package:
+
+```bash
+MAIL_MCP_CLIENT_ID=<your-client-id> npx -y mail-mcp login
+```
+
+Or from a clone:
 
 ```bash
 git clone https://github.com/Rixtayz/Mail-MCP.git
 cd Mail-MCP
-npm install
-npm run build
+npm install && npm run build
 MAIL_MCP_CLIENT_ID=<your-client-id> npm run login
 ```
 
-`npm run login` opens your system browser, signs you in with Microsoft, then stores the token cache in `~/.mail-mcp/token-cache.json` (file mode 600). Tokens refresh silently for 90 rolling days. If a tool ever answers "Token expired", run the same command again.
+The `login` command opens your system browser, signs you in with Microsoft, then stores the token cache in `~/.mail-mcp/token-cache.json` (file mode 600). Tokens refresh silently for 90 rolling days. If a tool ever answers "Token expired", run the same command again.
 
 | Environment variable | Purpose |
 |---|---|
@@ -68,14 +77,14 @@ MAIL_MCP_CLIENT_ID=<your-client-id> npm run login
 
 ## 3. Connect to Claude Desktop / Cowork
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS (or `%APPDATA%\Claude\claude_desktop_config.json` on Windows), reachable through **Settings → Developer → Edit Config**. Paths must be absolute.
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS (or `%APPDATA%\Claude\claude_desktop_config.json` on Windows), reachable through **Settings → Developer → Edit Config**.
 
 ```json
 {
   "mcpServers": {
     "mail": {
-      "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/to/Mail-MCP/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "mail-mcp"],
       "env": {
         "MAIL_MCP_CLIENT_ID": "<your-client-id>"
       }
@@ -84,6 +93,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS 
 }
 ```
 
+If Claude Desktop cannot find `npx` (it does not inherit your shell `PATH`), use absolute paths instead: `"command": "/absolute/path/to/node"`, `"args": ["/absolute/path/to/Mail-MCP/dist/index.js"]`.
+
 Quit Claude Desktop completely and start it again. Logs: `~/Library/Logs/Claude/mcp-server-mail.log`.
 
 Cowork runs local MCP servers only in **local** sessions, not in cloud sessions.
@@ -91,7 +102,7 @@ Cowork runs local MCP servers only in **local** sessions, not in cloud sessions.
 ## 4. Connect to Claude Code
 
 ```bash
-claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<your-client-id> --transport stdio mail -- node /absolute/path/to/Mail-MCP/dist/index.js
+claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<your-client-id> --transport stdio mail -- npx -y mail-mcp
 ```
 
 ## 5. Example prompts
@@ -114,7 +125,8 @@ npm run inspect   # MCP Inspector against dist/index.js
 Layout:
 
 ```
-src/index.ts          stdio entry point (stdout is JSON-RPC only; logs go to stderr)
+src/index.ts          CLI entry point: `mail-mcp` serves stdio, `mail-mcp login` signs in
+src/login.ts          interactive sign-in flow
 src/server.ts         builds the McpServer and registers the tools
 src/auth.ts           MSAL public client, file-based token cache
 src/graph.ts          Graph client: bearer auth, 429/503 retry, pagination, $batch in chunks of 20
