@@ -53,10 +53,10 @@ No client secret is created: the server is a public client using the authorizati
 
 ## 2. Sign in
 
-No install needed, `npx` fetches the package:
+No install needed, `npx` fetches the package from npm (`@rixtay/mail-mcp`, the installed command is `mail-mcp`):
 
 ```bash
-MAIL_MCP_CLIENT_ID=<your-client-id> npx -y mail-mcp login
+MAIL_MCP_CLIENT_ID=<your-client-id> npx -y @rixtay/mail-mcp login
 ```
 
 Or from a clone:
@@ -84,7 +84,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS 
   "mcpServers": {
     "mail": {
       "command": "npx",
-      "args": ["-y", "mail-mcp"],
+      "args": ["-y", "@rixtay/mail-mcp"],
       "env": {
         "MAIL_MCP_CLIENT_ID": "<your-client-id>"
       }
@@ -102,7 +102,7 @@ Cowork runs local MCP servers only in **local** sessions, not in cloud sessions.
 ## 4. Connect to Claude Code
 
 ```bash
-claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<your-client-id> --transport stdio mail -- npx -y mail-mcp
+claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<your-client-id> --transport stdio mail -- npx -y @rixtay/mail-mcp
 ```
 
 ## 5. Example prompts
