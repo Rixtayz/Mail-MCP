@@ -1,10 +1,10 @@
 # Mail-MCP
 
+![Mail-MCP: AI-powered inbox control for Outlook](docs/hero.png)
+
 A small, focused [MCP](https://modelcontextprotocol.io) server that lets Claude (Claude Desktop, Cowork, Claude Code or any MCP client) work on a **personal Outlook.com / Hotmail / Live mailbox** through Microsoft Graph: read and search mail, file it into folders, delete it, and **unsubscribe from newsletters**.
 
 Built for one job: clean up an overflowing personal inbox with an AI assistant, safely.
-
-![Mail-MCP: an assistant sorting an overflowing inbox into folders](https://raw.githubusercontent.com/Rixtayz/Mail-MCP/main/docs/screenshot.png)
 
 ## Tools
 
@@ -28,6 +28,8 @@ Design choices:
 - **Efficient on big mailboxes.** `mail_senders_summary` scans thousands of messages in a few seconds (1,000-item pages, minimal `$select`) and only fetches headers for the top senders through `$batch`.
 - **No generic send tool.** The `Mail.Send` permission is used solely to send `mailto:` unsubscribe requests.
 - Every tool ships a strict input schema, an output schema and MCP annotations (`readOnlyHint`, `destructiveHint`, …) so hosts can auto-approve read-only calls.
+
+![Inbox chaos to inbox zero with Mail-MCP: analyze senders, review, unsubscribe, organize, and safely delete](docs/inbox-workflow.png)
 
 ## Requirements
 
