@@ -27,7 +27,7 @@ export function summarizeMessage(m: GraphMessage): MessageSummary {
     id: m.id,
     from: m.from?.emailAddress?.address?.toLowerCase() ?? "",
     fromName: m.from?.emailAddress?.name ?? "",
-    subject: m.subject ?? "(sans objet)",
+    subject: m.subject ?? "(no subject)",
     receivedDateTime: m.receivedDateTime ?? "",
     isRead: m.isRead ?? false,
     preview: cleanPreview(m.bodyPreview ?? ""),
@@ -57,12 +57,12 @@ export function bodyToText(body: GraphMessage["body"]): string {
 /** Truncate text to the character limit, appending a marker when cut. */
 export function truncate(text: string, limit = CHARACTER_LIMIT): { text: string; truncated: boolean } {
   if (text.length <= limit) return { text, truncated: false };
-  return { text: text.slice(0, limit) + "\n\n[... tronqué]", truncated: true };
+  return { text: text.slice(0, limit) + "\n\n[... truncated]", truncated: true };
 }
 
 /** Render a list of message summaries as compact markdown. */
 export function messagesToMarkdown(items: MessageSummary[]): string {
-  if (items.length === 0) return "_Aucun message._";
+  if (items.length === 0) return "_No messages._";
   return items
     .map((m) => {
       const flag = m.isRead ? " " : "•";

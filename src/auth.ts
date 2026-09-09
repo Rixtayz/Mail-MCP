@@ -14,7 +14,7 @@ export function clientId(): string {
   const id = process.env.MAIL_MCP_CLIENT_ID;
   if (!id) {
     throw new AuthError(
-      "MAIL_MCP_CLIENT_ID manquant. Ajoutez l'Application (client) ID de votre inscription Entra dans la variable d'environnement MAIL_MCP_CLIENT_ID (voir README).",
+      "MAIL_MCP_CLIENT_ID is not set. Put the Application (client) ID of your Entra app registration in the MAIL_MCP_CLIENT_ID environment variable (see README).",
     );
   }
   return id;
@@ -63,7 +63,7 @@ export async function getAccessToken(): Promise<string> {
   const account = await getAccount();
   if (!account) {
     throw new AuthError(
-      "Aucun compte connecté. Lancez `npm run login` dans le dossier Mail-MCP pour vous connecter une fois à votre compte Outlook.com.",
+      "No account is signed in. Run `npm run login` in the Mail-MCP folder to sign in to your Outlook.com account once.",
     );
   }
   try {
@@ -71,7 +71,7 @@ export async function getAccessToken(): Promise<string> {
     return result.accessToken;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new AuthError(`Jeton expiré ou invalide (${msg.split("\n")[0]}). Relancez \`npm run login\` dans le dossier Mail-MCP.`);
+    throw new AuthError(`Token expired or invalid (${msg.split("\n")[0]}). Run \`npm run login\` again in the Mail-MCP folder.`);
   }
 }
 
@@ -80,9 +80,9 @@ export async function loginInteractive(openBrowser: (url: string) => Promise<voi
   const result = await getClient().acquireTokenInteractive({
     scopes: SCOPES,
     openBrowser,
-    successTemplate: "<h2>Mail-MCP connecté.</h2><p>Vous pouvez fermer cet onglet.</p>",
-    errorTemplate: "<h2>Échec de la connexion Mail-MCP.</h2><p>Retournez au terminal.</p>",
+    successTemplate: "<h2>Mail-MCP is connected.</h2><p>You can close this tab.</p>",
+    errorTemplate: "<h2>Mail-MCP sign-in failed.</h2><p>Go back to the terminal.</p>",
   });
-  if (!result.account) throw new AuthError("La connexion n'a retourné aucun compte.");
+  if (!result.account) throw new AuthError("Sign-in did not return an account.");
   return result.account;
 }

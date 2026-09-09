@@ -1,112 +1,140 @@
 # Mail-MCP
 
-Serveur MCP (stdio, TypeScript) qui donne à Claude l'accès à une boîte **Outlook.com / Hotmail personnelle** via Microsoft Graph : lire, chercher, classer dans des dossiers, supprimer et **se désabonner des newsletters**.
+A small, focused [MCP](https://modelcontextprotocol.io) server that lets Claude (Claude Desktop, Cowork, Claude Code or any MCP client) work on a **personal Outlook.com / Hotmail / Live mailbox** through Microsoft Graph: read and search mail, file it into folders, delete it, and **unsubscribe from newsletters**.
 
-9 outils, préfixe `mail_` :
+Built for one job: clean up an overflowing personal inbox with an AI assistant, safely.
 
-| Outil | Rôle |
+## Tools
+
+Nine tools, all prefixed `mail_`:
+
+| Tool | What it does |
 |---|---|
-| `mail_list_folders` | Arbre des dossiers avec compteurs |
-| `mail_create_folder` | Créer un dossier (idempotent) |
-| `mail_search` | Lister/chercher des messages (filtres expéditeur, dates, non lus, plein texte), paginé |
-| `mail_get_message` | Contenu complet d'un message + infos de désabonnement |
-| `mail_senders_summary` | **Synthèse par expéditeur** : volume, dernier message, méthode de désabonnement disponible |
-| `mail_move` | Déplacer jusqu'à 500 messages vers un dossier |
-| `mail_delete` | Corbeille par défaut, `permanent: true` pour purger |
-| `mail_bulk_by_sender` | Déplacer ou supprimer tous les messages d'un expéditeur (`dryRun` disponible) |
-| `mail_unsubscribe` | Un-clic RFC 8058 → courriel `mailto:` → sinon URL à ouvrir dans le navigateur |
+| `mail_list_folders` | Folder tree with total / unread counts |
+| `mail_create_folder` | Create a folder (idempotent) |
+| `mail_search` | List / search messages (sender, date range, unread, full text), paginated |
+| `mail_get_message` | Full content of one message + detected unsubscribe options |
+| `mail_senders_summary` | **Aggregate a whole folder by sender**: volume, latest message, available unsubscribe method |
+| `mail_move` | Move up to 500 messages to a folder |
+| `mail_delete` | Move to Deleted Items by default, `permanent: true` to purge |
+| `mail_bulk_by_sender` | Move or delete every message from one sender (`dryRun` supported) |
+| `mail_unsubscribe` | RFC 8058 one-click POST → `mailto:` email → otherwise a URL for the assistant to open in a browser |
 
-Aucun outil d'envoi générique n'est exposé. La permission `Mail.Send` sert uniquement au désabonnement par `mailto:`.
+Design choices:
 
-## 1. Prérequis
+- **Safe by default.** Deletion goes to Deleted Items (visible and restorable in Outlook). Permanent deletion requires an explicit flag. Bulk actions support `dryRun`.
+- **Efficient on big mailboxes.** `mail_senders_summary` scans thousands of messages in a few seconds (1,000-item pages, minimal `$select`) and only fetches headers for the top senders through `$batch`.
+- **No generic send tool.** The `Mail.Send` permission is used solely to send `mailto:` unsubscribe requests.
+- Every tool ships a strict input schema, an output schema and MCP annotations (`readOnlyHint`, `destructiveHint`, …) so hosts can auto-approve read-only calls.
 
-- Node.js 20 ou plus (`node --version`).
-- Un compte Microsoft personnel (Outlook.com, Hotmail, Live).
+## Requirements
 
-## 2. Inscription d'application Microsoft Entra (une fois, gratuit)
+- Node.js 20 or newer.
+- A personal Microsoft account (outlook.com, hotmail.com, live.com, msn.com).
+- A free Microsoft Entra app registration (5 minutes, below). Password-based IMAP was switched off for personal accounts in September 2024, so an OAuth app is the only supported way in.
 
-IMAP par mot de passe n'existe plus sur Outlook.com : il faut une « app registration ». Aucun abonnement Azure n'est nécessaire.
+## 1. Register an app in Microsoft Entra (once, free)
 
-1. Ouvrez <https://entra.microsoft.com> et connectez-vous avec votre compte personnel.
-2. Menu **Identity → Applications → App registrations → New registration**.
-3. Remplissez :
-   - **Name** : `Mail-MCP`
-   - **Supported account types** : **Personal Microsoft accounts only**
-   - **Redirect URI** : plateforme **Mobile and desktop applications**, valeur `http://localhost`
-4. Cliquez **Register**, puis copiez l'**Application (client) ID** (format `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
-5. Dans **Authentication**, vérifiez que `http://localhost` est bien listé sous « Mobile and desktop applications » et que **Allow public client flows** est sur **Yes**.
-6. Dans **API permissions**, ajoutez (Microsoft Graph, *Delegated*) : `Mail.ReadWrite`, `Mail.Send`, `User.Read`, `offline_access`. Pas besoin de « grant admin consent » : le consentement est demandé à la première connexion.
+No Azure subscription is needed for a public client app.
 
-Aucun secret client n'est créé : l'application est un client public (code d'autorisation + PKCE).
+1. Go to <https://entra.microsoft.com> and sign in with your personal Microsoft account.
+2. **Identity → Applications → App registrations → New registration**.
+3. Fill in:
+   - **Name**: `Mail-MCP`
+   - **Supported account types**: **Personal Microsoft accounts only**
+   - **Redirect URI**: platform **Mobile and desktop applications**, value `http://localhost`
+4. Click **Register** and copy the **Application (client) ID** (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+5. Under **Authentication**, make sure `http://localhost` is listed under "Mobile and desktop applications" and **Allow public client flows** is **Yes**.
+6. Under **API permissions**, add Microsoft Graph *delegated* permissions: `Mail.ReadWrite`, `Mail.Send`, `User.Read`, `offline_access`. No admin consent is needed; you consent at first sign-in.
 
-## 3. Installation et connexion
+No client secret is created: the server is a public client using the authorization code flow with PKCE.
+
+## 2. Install and sign in
 
 ```bash
-cd /chemin/vers/Mail-MCP
+git clone https://github.com/Rixtayz/Mail-MCP.git
+cd Mail-MCP
 npm install
 npm run build
-MAIL_MCP_CLIENT_ID=<votre-client-id> npm run login
+MAIL_MCP_CLIENT_ID=<your-client-id> npm run login
 ```
 
-`npm run login` ouvre le navigateur système, vous connecte à Microsoft, puis enregistre le jeton (rafraîchi automatiquement pendant 90 jours glissants) dans `~/.mail-mcp/token-cache.json` (permissions 600). Si un outil répond « Jeton expiré », relancez simplement cette commande.
+`npm run login` opens your system browser, signs you in with Microsoft, then stores the token cache in `~/.mail-mcp/token-cache.json` (file mode 600). Tokens refresh silently for 90 rolling days. If a tool ever answers "Token expired", run the same command again.
 
-Variables d'environnement :
-
-| Variable | Rôle |
+| Environment variable | Purpose |
 |---|---|
-| `MAIL_MCP_CLIENT_ID` | **Obligatoire.** Application (client) ID de l'étape 2 |
-| `MAIL_MCP_CACHE_PATH` | Optionnel. Emplacement du cache de jeton |
+| `MAIL_MCP_CLIENT_ID` | **Required.** Application (client) ID from step 1 |
+| `MAIL_MCP_CACHE_PATH` | Optional. Token cache location |
 
-## 4. Brancher dans Claude Desktop (Cowork)
+## 3. Connect to Claude Desktop / Cowork
 
-Fichier : `~/Library/Application Support/Claude/claude_desktop_config.json` (menu **Settings → Developer → Edit Config**). Chemins absolus obligatoires.
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS (or `%APPDATA%\Claude\claude_desktop_config.json` on Windows), reachable through **Settings → Developer → Edit Config**. Paths must be absolute.
 
 ```json
 {
   "mcpServers": {
     "mail": {
-      "command": "/usr/local/bin/node",
-      "args": ["/chemin/vers/Mail-MCP/dist/index.js"],
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/Mail-MCP/dist/index.js"],
       "env": {
-        "MAIL_MCP_CLIENT_ID": "<votre-client-id>"
+        "MAIL_MCP_CLIENT_ID": "<your-client-id>"
       }
     }
   }
 }
 ```
 
-Quittez complètement Claude Desktop (Cmd+Q) puis relancez-le. Logs : `~/Library/Logs/Claude/mcp-server-mail.log`.
+Quit Claude Desktop completely and start it again. Logs: `~/Library/Logs/Claude/mcp-server-mail.log`.
 
-Note : Cowork n'exécute les serveurs MCP locaux qu'en **session locale** (pas dans les sessions cloud).
+Cowork runs local MCP servers only in **local** sessions, not in cloud sessions.
 
-## 5. Brancher dans Claude Code
+## 4. Connect to Claude Code
 
 ```bash
-claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<votre-client-id> --transport stdio mail -- /usr/local/bin/node /chemin/vers/Mail-MCP/dist/index.js
+claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<your-client-id> --transport stdio mail -- node /absolute/path/to/Mail-MCP/dist/index.js
 ```
 
-## 6. Exemples de prompts
+## 5. Example prompts
 
-- « Fais-moi la synthèse des expéditeurs de ma boîte de réception et repère les newsletters. »
-- « Désabonne-moi de toutes les newsletters que je n'ai pas ouvertes depuis 6 mois, puis mets leurs messages à la corbeille. »
-- « Crée un dossier Factures et déplace-y tous les courriels de facture@fournisseur.com. »
-- « Montre-moi le dernier courriel de la banque. »
+- "Summarise the senders in my inbox and flag the newsletters."
+- "Unsubscribe me from every newsletter I haven't opened in six months, then move their messages to Deleted Items."
+- "Create an Invoices folder and move everything from billing@vendor.com into it."
+- "Show me the latest email from my bank."
 
-Flux typique : `mail_senders_summary` → validation avec vous → `mail_unsubscribe(lastMessageId)` par newsletter (si la réponse est `method: "browser"`, Claude ouvre l'URL dans son navigateur) → `mail_bulk_by_sender(action: "delete")`.
+Typical flow: `mail_senders_summary` → the assistant proposes a list, you confirm → `mail_unsubscribe(lastMessageId)` per newsletter (when the answer is `method: "browser"`, the assistant opens the URL in its browser and finishes there) → `mail_bulk_by_sender(action: "delete")`.
 
-## 7. Développement
+## Development
 
 ```bash
-npm test          # vitest (parse des en-têtes, retry/batch Graph, service avec Graph simulé)
+npm test          # vitest: header parsing, Graph retry/batch/pagination, service with a mocked Graph
 npm run typecheck
-npm run inspect   # MCP Inspector sur dist/index.js
+npm run inspect   # MCP Inspector against dist/index.js
 ```
 
-Structure : `src/auth.ts` (MSAL, cache fichier), `src/graph.ts` (fetch + retry 429, pagination, $batch par 20), `src/mail.ts` (logique métier), `src/unsubscribe.ts` (List-Unsubscribe, RFC 8058), `src/tools/*.ts` (définition des 9 outils), `scripts/login.ts`.
+Layout:
 
-## Limites connues
+```
+src/index.ts          stdio entry point (stdout is JSON-RPC only; logs go to stderr)
+src/server.ts         builds the McpServer and registers the tools
+src/auth.ts           MSAL public client, file-based token cache
+src/graph.ts          Graph client: bearer auth, 429/503 retry, pagination, $batch in chunks of 20
+src/mail.ts           business logic (folders, search, sender summary, move/delete, unsubscribe cascade)
+src/unsubscribe.ts    List-Unsubscribe / List-Unsubscribe-Post parsing, RFC 8058 one-click POST
+src/tools/*.ts        tool definitions (zod v4 schemas, annotations)
+scripts/login.ts      one-time interactive sign-in
+```
 
-- Throttling Microsoft : 10 000 requêtes / 10 min par boîte et 4 requêtes concurrentes ; le serveur sérialise les lots et réessaie sur 429.
-- `mail_search` avec `query` (plein texte) ne se combine pas avec les autres filtres (limitation Graph) et plafonne à environ 250 résultats.
-- Une suppression normale est un déplacement vers « Éléments supprimés » (l'appel `DELETE` de Graph enverrait le message dans la zone « Éléments récupérables », invisible dans Outlook). Les ids des messages changent à chaque changement de dossier ; `mail_move` renvoie la correspondance.
-- Le désabonnement réel dépend de l'expéditeur : le un-clic et le `mailto:` envoient la demande, la radiation effective est de son ressort.
+Stack: `@modelcontextprotocol/server` v2, zod v4, `@azure/msal-node` v6, `html-to-text`.
+
+## Things worth knowing
+
+- **Message ids change** whenever a message changes folder. `mail_move` and `mail_delete` return the old → new id mapping.
+- A normal delete is a **move to Deleted Items**. Graph's own `DELETE` would drop the item into Recoverable Items, which is invisible in Outlook, so it is deliberately not used.
+- Microsoft throttles Outlook to 10,000 requests per 10 minutes per mailbox and 4 concurrent requests. Batches are serialised and retried on 429.
+- `mail_search` with `query` (full text) cannot be combined with the other filters (Graph limitation) and tops out at a few hundred results.
+- Whether an unsubscribe actually takes effect is up to the sender. One-click and `mailto:` send the request; the assistant's browser handles the rest.
+- The authority is `login.microsoftonline.com/consumers`. With `common`, refresh tokens for personal accounts are rejected after the first refresh.
+
+## License
+
+MIT

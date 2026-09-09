@@ -3,12 +3,12 @@ import { cachePath, clientId, loginInteractive } from "../src/auth.js";
 
 async function main(): Promise<void> {
   clientId();
-  console.error("Ouverture du navigateur pour la connexion Microsoft…");
+  console.error("Opening your browser for Microsoft sign-in…");
   const account = await loginInteractive(async (url) => {
-    console.error(`Si le navigateur ne s'ouvre pas, visitez :\n${url}\n`);
+    console.error(`If the browser does not open, visit:\n${url}\n`);
     await open(url);
   });
-  console.error(`Connecté : ${account.username}\nJeton enregistré dans ${cachePath()}`);
+  console.error(`Signed in as ${account.username}\nToken cache saved to ${cachePath()}`);
 }
 
 main().catch((err) => {

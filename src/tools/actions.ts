@@ -10,28 +10,28 @@ const OutcomeSchema = z.object({
 });
 
 function summarizeOutcomes(outcomes: ActionOutcome[], verb: string) {
-  const failed = outcomes.filter((o) => !o.ok).map((o) => ({ id: o.id, error: o.error ?? "inconnu" }));
+  const failed = outcomes.filter((o) => !o.ok).map((o) => ({ id: o.id, error: o.error ?? "unknown" }));
   const succeeded = outcomes.length - failed.length;
   const moved = outcomes.filter((o) => o.ok && o.newId).map((o) => ({ id: o.id, newId: o.newId! }));
   const text =
     `${succeeded} message(s) ${verb}.` +
-    (failed.length ? ` ${failed.length} échec(s) : ${failed.map((f) => `${f.id.slice(0, 12)}… (${f.error})`).join(", ")}` : "") +
-    (moved.length ? " Les ids ont changé (voir `moved`) : les anciens ids ne sont plus valides." : "");
+    (failed.length ? ` ${failed.length} failure(s): ${failed.map((f) => `${f.id.slice(0, 12)}… (${f.error})`).join(", ")}` : "") +
+    (moved.length ? " Ids changed (see `moved`): the old ids are no longer valid." : "");
   return { text, structured: { succeeded, failed, ...(moved.length ? { moved } : {}) } };
 }
 
-const Ids = z.array(z.string().min(1)).min(1).max(500).describe("Ids de messages (1 à 500)");
+const Ids = z.array(z.string().min(1)).min(1).max(500).describe("Message ids (1 to 500)");
 
 export function registerActionTools(server: McpServer, mail: MailService): void {
   server.registerTool(
     "mail_move",
     {
-      title: "Déplacer des messages",
+      title: "Move messages",
       description:
-        "Déplace un ou plusieurs messages (jusqu'à 500 ids) vers un dossier (nom, chemin ou id). Utilisé pour classer. " +
-        "ATTENTION : Outlook attribue un nouvel id à chaque message déplacé ; le résultat `moved` donne la correspondance ancien → nouveau id. " +
-        "Pour déplacer tous les messages d'un expéditeur, préférez mail_bulk_by_sender.",
-      inputSchema: z.object({ ids: Ids, folder: z.string().min(1).describe("Dossier de destination") }).strict(),
+        "Move one or more messages (up to 500 ids) to a folder (name, path or id). Used for filing. " +
+        "NOTE: Outlook assigns a new id to every moved message; the `moved` result maps old id → new id. " +
+        "To move every message from a sender, prefer mail_bulk_by_sender.",
+      inputSchema: z.object({ ids: Ids, folder: z.string().min(1).describe("Destination folder") }).strict(),
       outputSchema: OutcomeSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -39,7 +39,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
       run(async () => {
         const outcomes = await mail.move(ids, folder);
         mail.invalidateSummaries();
-        const s = summarizeOutcomes(outcomes, `déplacé(s) vers « ${folder} »`);
+        const s = summarizeOutcomes(outcomes, `moved to "${folder}"`);
         return ok(s.text, s.structured);
       }),
   );
@@ -47,14 +47,14 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
   server.registerTool(
     "mail_delete",
     {
-      title: "Supprimer des messages",
+      title: "Delete messages",
       description:
-        "Supprime un ou plusieurs messages (jusqu'à 500 ids). Par défaut les messages vont dans Éléments supprimés (récupérable via mail_search folder=deleteditems puis mail_move ; leur id change). " +
-        "`permanent: true` supprime définitivement : à n'utiliser que sur demande explicite de l'utilisateur.",
+        "Delete one or more messages (up to 500 ids). By default messages go to Deleted Items (recoverable with mail_search folder=deleteditems then mail_move; their id changes). " +
+        "`permanent: true` deletes irreversibly: only use it when the user explicitly asks for it.",
       inputSchema: z
         .object({
           ids: Ids,
-          permanent: z.boolean().default(false).describe("true = suppression définitive (irréversible). Défaut : corbeille."),
+          permanent: z.boolean().default(false).describe("true = permanent deletion (irreversible). Default: Deleted Items."),
         })
         .strict(),
       outputSchema: OutcomeSchema,
@@ -64,7 +64,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
       run(async () => {
         const outcomes = await mail.delete(ids, permanent);
         mail.invalidateSummaries();
-        const s = summarizeOutcomes(outcomes, permanent ? "supprimé(s) définitivement" : "mis à la corbeille");
+        const s = summarizeOutcomes(outcomes, permanent ? "permanently deleted" : "moved to Deleted Items");
         return ok(s.text, s.structured);
       }),
   );
@@ -72,18 +72,18 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
   server.registerTool(
     "mail_bulk_by_sender",
     {
-      title: "Action en masse par expéditeur",
+      title: "Bulk action by sender",
       description:
-        "Déplace ou supprime TOUS les messages d'un expéditeur (adresse exacte) dans un dossier (Inbox par défaut). " +
-        "Utilisez `dryRun: true` d'abord pour connaître le nombre de messages concernés. La suppression va à la corbeille sauf si `permanent: true`.",
+        "Move or delete EVERY message from a sender (exact address) in a folder (Inbox by default). " +
+        "Use `dryRun: true` first to learn how many messages match. Deletion goes to Deleted Items unless `permanent: true`.",
       inputSchema: z
         .object({
-          from: z.string().email().describe("Adresse exacte de l'expéditeur"),
-          folder: z.string().optional().describe("Dossier source. Défaut : inbox"),
-          action: z.enum(["move", "delete"]).describe("move = déplacer vers targetFolder ; delete = supprimer"),
-          targetFolder: z.string().optional().describe("Obligatoire si action = move"),
-          permanent: z.boolean().default(false).describe("Avec action = delete : suppression définitive"),
-          dryRun: z.boolean().default(false).describe("true = compter seulement, ne rien modifier"),
+          from: z.string().email().describe("Exact sender address"),
+          folder: z.string().optional().describe("Source folder. Default: inbox"),
+          action: z.enum(["move", "delete"]).describe("move = move to targetFolder; delete = delete"),
+          targetFolder: z.string().optional().describe("Required when action = move"),
+          permanent: z.boolean().default(false).describe("With action = delete: permanent deletion"),
+          dryRun: z.boolean().default(false).describe("true = count only, change nothing"),
         })
         .strict(),
       outputSchema: z.object({ matched: z.number(), dryRun: z.boolean(), succeeded: z.number(), failed: z.array(z.object({ id: z.string(), error: z.string() })) }),
@@ -91,28 +91,28 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     },
     async ({ from, folder, action, targetFolder, permanent, dryRun }) =>
       run(async () => {
-        if (action === "move" && !targetFolder) throw new Error("`targetFolder` est obligatoire avec action = move.");
+        if (action === "move" && !targetFolder) throw new Error("`targetFolder` is required when action = move.");
         const ids = await mail.idsFromSender(from, folder);
         if (dryRun || ids.length === 0) {
-          return ok(`${ids.length} message(s) de ${from} dans « ${folder ?? "inbox"} ».${dryRun ? " Aucune modification (dryRun)." : ""}`, { matched: ids.length, dryRun, succeeded: 0, failed: [] });
+          return ok(`${ids.length} message(s) from ${from} in "${folder ?? "inbox"}".${dryRun ? " Nothing changed (dryRun)." : ""}`, { matched: ids.length, dryRun, succeeded: 0, failed: [] });
         }
         const outcomes = action === "move" ? await mail.move(ids, targetFolder!) : await mail.delete(ids, permanent);
         mail.invalidateSummaries();
-        const verb = action === "move" ? `déplacé(s) vers « ${targetFolder} »` : permanent ? "supprimé(s) définitivement" : "mis à la corbeille";
+        const verb = action === "move" ? `moved to "${targetFolder}"` : permanent ? "permanently deleted" : "moved to Deleted Items";
         const s = summarizeOutcomes(outcomes, verb);
-        return ok(`${ids.length} message(s) de ${from} : ${s.text}`, { matched: ids.length, dryRun: false, ...s.structured });
+        return ok(`${ids.length} message(s) from ${from}: ${s.text}`, { matched: ids.length, dryRun: false, ...s.structured });
       }),
   );
 
   server.registerTool(
     "mail_unsubscribe",
     {
-      title: "Se désabonner",
+      title: "Unsubscribe",
       description:
-        "Tente de se désabonner de la liste d'un message, dans l'ordre : (1) un-clic RFC 8058 par POST HTTPS, (2) courriel automatique à l'adresse mailto de List-Unsubscribe, " +
-        "(3) sinon retourne `method: \"browser\"` avec l'URL à ouvrir dans le navigateur pour finir manuellement, (4) `method: \"none\"` si aucun en-tête. " +
-        "Ne supprime aucun message. Passez de préférence le `lastMessageId` fourni par mail_senders_summary.",
-      inputSchema: z.object({ id: z.string().min(1).describe("Id du message représentatif de la newsletter") }).strict(),
+        "Try to unsubscribe from the mailing list of a message, in order: (1) RFC 8058 one-click HTTPS POST, (2) automatic email to the List-Unsubscribe mailto address, " +
+        "(3) otherwise returns `method: \"browser\"` with the URL to open in a browser to finish manually, (4) `method: \"none\"` when no header exists. " +
+        "Deletes nothing. Preferably pass the `lastMessageId` returned by mail_senders_summary.",
+      inputSchema: z.object({ id: z.string().min(1).describe("Id of a representative message of the newsletter") }).strict(),
       outputSchema: z.object({
         method: z.enum(["one-click", "mailto", "browser", "none"]),
         ok: z.boolean(),
@@ -127,7 +127,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     async ({ id }) =>
       run(async () => {
         const r = await mail.unsubscribe(id);
-        const head = r.ok ? `✅ Désabonné de ${r.from} (${r.method}).` : r.method === "browser" ? `🌐 Action navigateur requise pour ${r.from} : ${r.url}` : `⚠️ ${r.from} : ${r.method}`;
+        const head = r.ok ? `✅ Unsubscribed from ${r.from} (${r.method}).` : r.method === "browser" ? `🌐 Browser action required for ${r.from}: ${r.url}` : `⚠️ ${r.from}: ${r.method}`;
         return ok(`${head}\n${r.detail}`, { ...r });
       }),
   );

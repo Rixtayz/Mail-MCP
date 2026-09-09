@@ -1,9 +1,8 @@
 {
   "name": "mail-mcp",
   "version": "0.1.0",
-  "description": "MCP server for a personal Outlook.com mailbox: read, classify, delete, unsubscribe.",
+  "description": "MCP server for a personal Outlook.com / Hotmail mailbox: read, search, file, delete and unsubscribe from newsletters via Microsoft Graph.",
   "type": "module",
-  "private": true,
   "bin": {
     "mail-mcp": "dist/index.js"
   },
@@ -32,5 +31,29 @@
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
-  }
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "outlook",
+    "hotmail",
+    "microsoft-graph",
+    "email",
+    "unsubscribe",
+    "claude"
+  ],
+  "author": "Rixtayz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rixtayz/Mail-MCP.git"
+  },
+  "homepage": "https://github.com/Rixtayz/Mail-MCP#readme",
+  "bugs": {
+    "url": "https://github.com/Rixtayz/Mail-MCP/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }

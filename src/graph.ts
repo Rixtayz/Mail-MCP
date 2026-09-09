@@ -24,15 +24,15 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 export function describeGraphError(status: number, code: string | undefined, raw: string): string {
   switch (status) {
     case 401:
-      return "Non autorisé (401) : le jeton est expiré ou invalide. Relancez `npm run login` dans le dossier Mail-MCP.";
+      return "Unauthorized (401): the token is expired or invalid. Run `npm run login` again in the Mail-MCP folder.";
     case 403:
-      return `Accès refusé (403${code ? ", " + code : ""}) : l'inscription d'app n'a probablement pas les permissions Mail.ReadWrite / Mail.Send. Vérifiez le README puis relancez \`npm run login\`.`;
+      return `Forbidden (403${code ? ", " + code : ""}): the app registration probably lacks the Mail.ReadWrite / Mail.Send permissions. Check the README, then run \`npm run login\` again.`;
     case 404:
-      return "Introuvable (404) : le message ou le dossier n'existe plus (déplacé ou supprimé). Relancez mail_search ou mail_list_folders pour obtenir des ids à jour.";
+      return "Not found (404): the message or folder no longer exists (moved or deleted; ids change when a message changes folder). Call mail_search or mail_list_folders again to get fresh ids.";
     case 429:
-      return "Limite de requêtes Microsoft atteinte (429) malgré les réessais. Attendez une minute puis réessayez avec moins d'éléments.";
+      return "Microsoft rate limit hit (429) despite retries. Wait a minute, then retry with fewer items.";
     default:
-      return `Erreur Graph ${status}${code ? " (" + code + ")" : ""}: ${raw.slice(0, 300)}`;
+      return `Graph error ${status}${code ? " (" + code + ")" : ""}: ${raw.slice(0, 300)}`;
   }
 }
 

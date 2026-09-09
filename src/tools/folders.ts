@@ -17,11 +17,11 @@ export function registerFolderTools(server: McpServer, mail: MailService): void 
   server.registerTool(
     "mail_list_folders",
     {
-      title: "Lister les dossiers",
+      title: "List folders",
       description:
-        "Liste tous les dossiers de la boîte Outlook.com avec leur chemin, le nombre total de messages et le nombre de non lus. " +
-        "À appeler avant de classer pour connaître les dossiers existants. Les autres outils acceptent un dossier par nom (« Factures »), " +
-        "par chemin (« Archive/2024 »), par nom bien connu (inbox, deleteditems, junkemail, archive) ou par id.",
+        "List every folder of the Outlook.com mailbox with its path, total message count and unread count. " +
+        "Call it before filing messages to learn which folders exist. Other tools accept a folder by display name (\"Invoices\"), " +
+        "by path (\"Archive/2024\"), by well-known name (inbox, deleteditems, junkemail, archive) or by id.",
       inputSchema: z.object({}).strict(),
       outputSchema: z.object({ folders: z.array(FolderSchema) }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -29,22 +29,22 @@ export function registerFolderTools(server: McpServer, mail: MailService): void 
     async () =>
       run(async () => {
         const folders = await mail.listFolders(true);
-        const text = folders.map((f) => `- ${f.path} (${f.total} messages, ${f.unread} non lus)${f.wellKnownName ? ` [${f.wellKnownName}]` : ""}`).join("\n");
-        return ok(text || "_Aucun dossier._", { folders });
+        const text = folders.map((f) => `- ${f.path} (${f.total} messages, ${f.unread} unread)${f.wellKnownName ? ` [${f.wellKnownName}]` : ""}`).join("\n");
+        return ok(text || "_No folders._", { folders });
       }),
   );
 
   server.registerTool(
     "mail_create_folder",
     {
-      title: "Créer un dossier",
+      title: "Create folder",
       description:
-        "Crée un dossier Outlook (à la racine ou sous un dossier parent). Idempotent : si un dossier du même nom existe déjà, il est retourné sans erreur. " +
-        "Exemple : { name: \"Newsletters\" } ou { name: \"2025\", parent: \"Factures\" }.",
+        "Create an Outlook folder (at the root or under a parent). Idempotent: if a folder with the same name already exists it is returned without error. " +
+        "Example: { name: \"Newsletters\" } or { name: \"2025\", parent: \"Invoices\" }.",
       inputSchema: z
         .object({
-          name: z.string().min(1).max(100).describe("Nom du dossier à créer"),
-          parent: z.string().optional().describe("Dossier parent (nom, chemin ou id). Racine si omis."),
+          name: z.string().min(1).max(100).describe("Name of the folder to create"),
+          parent: z.string().optional().describe("Parent folder (name, path or id). Root if omitted."),
         })
         .strict(),
       outputSchema: z.object({ folder: FolderSchema, created: z.boolean() }),
@@ -53,7 +53,7 @@ export function registerFolderTools(server: McpServer, mail: MailService): void 
     async ({ name, parent }) =>
       run(async () => {
         const r = await mail.createFolder(name, parent);
-        const text = r.created ? `Dossier créé : ${r.folder.path} (id ${r.folder.id})` : `Dossier déjà existant : ${r.folder.path} (id ${r.folder.id})`;
+        const text = r.created ? `Folder created: ${r.folder.path} (id ${r.folder.id})` : `Folder already exists: ${r.folder.path} (id ${r.folder.id})`;
         return ok(text, { folder: r.folder, created: r.created });
       }),
   );

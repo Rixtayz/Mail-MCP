@@ -35,7 +35,7 @@ describe("MailService folders", () => {
     expect(await mail.resolveFolderId("DeletedItems")).toBe("deleteditems");
     expect(await mail.resolveFolderId("factures")).toBe(folders.value[1]!.id);
     expect(await mail.resolveFolderId(folders.value[1]!.id)).toBe(folders.value[1]!.id);
-    await expect(mail.resolveFolderId("Inexistant")).rejects.toThrow(/introuvable.*Factures/);
+    await expect(mail.resolveFolderId("Inexistant")).rejects.toThrow(/not found.*Factures/);
   });
 
   it("createFolder is idempotent", async () => {

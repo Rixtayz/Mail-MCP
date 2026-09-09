@@ -22,7 +22,7 @@ const UnsubscribeSchema = z.object({
   oneClick: z.boolean(),
 });
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}(T[\d:]+(\.\d+)?Z?)?$/, "Date ISO attendue, ex. 2025-01-31 ou 2025-01-31T00:00:00Z");
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}(T[\d:]+(\.\d+)?Z?)?$/, "ISO date expected, e.g. 2025-01-31 or 2025-01-31T00:00:00Z");
 
 function normalizeDate(d: string | undefined): string | undefined {
   if (!d) return undefined;
@@ -33,22 +33,22 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
   server.registerTool(
     "mail_search",
     {
-      title: "Chercher des messages",
+      title: "Search messages",
       description:
-        "Liste les messages d'un dossier (Inbox par défaut), du plus récent au plus ancien, avec filtres : expéditeur exact, période, non lus. " +
-        "`query` fait une recherche plein texte (sujet, corps, expéditeur) et est exclusif avec les autres filtres. " +
-        "Retour compact (id, expéditeur, sujet, date, aperçu) ; utilisez mail_get_message pour le contenu complet. " +
-        "Pour parcourir, repassez `cursor` tel quel. Pour un tri par expéditeur sur toute la boîte, préférez mail_senders_summary.",
+        "List messages of a folder (Inbox by default), newest first, with filters: exact sender, date range, unread only. " +
+        "`query` runs a full-text search (subject, body, sender) and cannot be combined with the other filters. " +
+        "Returns a compact summary (id, sender, subject, date, preview); use mail_get_message for the full content. " +
+        "To page, pass `cursor` back verbatim. For a whole-mailbox view by sender, prefer mail_senders_summary.",
       inputSchema: z
         .object({
-          folder: z.string().optional().describe("Dossier (nom, chemin, nom bien connu ou id). Défaut : inbox"),
-          from: z.string().optional().describe("Adresse d'expéditeur exacte, ex. news@example.com"),
-          since: isoDate.optional().describe("Reçus à partir de cette date (ISO)"),
-          until: isoDate.optional().describe("Reçus jusqu'à cette date (ISO)"),
-          unreadOnly: z.boolean().optional().describe("Seulement les non lus"),
-          query: z.string().optional().describe("Recherche plein texte (KQL simple). Exclusif avec from/since/until/unreadOnly."),
-          limit: z.number().int().min(1).max(100).default(25).describe("Nombre de résultats par page (max 100)"),
-          cursor: z.string().optional().describe("Curseur de page renvoyé par un appel précédent"),
+          folder: z.string().optional().describe("Folder (name, path, well-known name or id). Default: inbox"),
+          from: z.string().optional().describe("Exact sender address, e.g. news@example.com"),
+          since: isoDate.optional().describe("Received on or after this date (ISO)"),
+          until: isoDate.optional().describe("Received on or before this date (ISO)"),
+          unreadOnly: z.boolean().optional().describe("Only unread messages"),
+          query: z.string().optional().describe("Full-text search (simple KQL). Exclusive with from/since/until/unreadOnly."),
+          limit: z.number().int().min(1).max(100).default(25).describe("Results per page (max 100)"),
+          cursor: z.string().optional().describe("Page cursor returned by a previous call"),
         })
         .strict(),
       outputSchema: z.object({ items: z.array(SummarySchema), count: z.number(), nextCursor: z.string().optional() }),
@@ -57,7 +57,7 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
     async (p) =>
       run(async () => {
         if (p.query && (p.from || p.since || p.until || p.unreadOnly)) {
-          throw new Error("`query` ne peut pas être combiné avec from/since/until/unreadOnly (limitation Microsoft Graph). Faites deux appels.");
+          throw new Error("`query` cannot be combined with from/since/until/unreadOnly (Microsoft Graph limitation). Make two calls.");
         }
         const r = await mail.search({
           folder: p.folder,
@@ -69,7 +69,7 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
           limit: p.limit,
           cursor: p.cursor,
         });
-        const text = messagesToMarkdown(r.items) + (r.nextCursor ? `\n\n_Page suivante disponible : repassez \`cursor\`._` : "");
+        const text = messagesToMarkdown(r.items) + (r.nextCursor ? `\n\n_More results available: pass \`cursor\` back._` : "");
         return ok(text, { items: r.items, count: r.items.length, ...(r.nextCursor ? { nextCursor: r.nextCursor } : {}) });
       }),
   );
@@ -77,11 +77,11 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
   server.registerTool(
     "mail_get_message",
     {
-      title: "Lire un message",
+      title: "Read a message",
       description:
-        "Retourne le contenu complet d'un message (corps converti en texte, destinataires, pièces jointes présentes, lien web) " +
-        "et les informations de désabonnement détectées dans les en-têtes (https, mailto, un-clic). Le corps est tronqué à 25 000 caractères.",
-      inputSchema: z.object({ id: z.string().min(1).describe("Id du message (issu de mail_search ou mail_senders_summary)") }).strict(),
+        "Return the full content of one message (body converted to text, recipients, attachment flag, web link) " +
+        "plus the unsubscribe options found in its headers (https, mailto, one-click). The body is truncated at 25,000 characters.",
+      inputSchema: z.object({ id: z.string().min(1).describe("Message id (from mail_search or mail_senders_summary)") }).strict(),
       outputSchema: z.object({
         message: SummarySchema,
         to: z.array(z.string()),
@@ -98,13 +98,13 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
         const r = await mail.getMessage(id);
         const u = r.unsubscribe;
         const unsubLine = u.oneClick
-          ? `Désabonnement un-clic disponible (${u.https})`
+          ? `One-click unsubscribe available (${u.https})`
           : u.mailto || u.https
-            ? `Désabonnement : ${u.https ? "URL " + u.https : ""}${u.https && u.mailto ? " / " : ""}${u.mailto ? "mailto " + u.mailto : ""}`
-            : "Aucun en-tête de désabonnement";
+            ? `Unsubscribe: ${u.https ? "URL " + u.https : ""}${u.https && u.mailto ? " / " : ""}${u.mailto ? "mailto " + u.mailto : ""}`
+            : "No unsubscribe header";
         const text =
-          `**${r.summary.subject}**\nDe : ${r.summary.fromName} <${r.summary.from}>\nÀ : ${r.to.join(", ")}\nReçu : ${r.summary.receivedDateTime}\n` +
-          `${r.hasAttachments ? "Pièces jointes : oui\n" : ""}${unsubLine}\n\n---\n${r.body}`;
+          `**${r.summary.subject}**\nFrom: ${r.summary.fromName} <${r.summary.from}>\nTo: ${r.to.join(", ")}\nReceived: ${r.summary.receivedDateTime}\n` +
+          `${r.hasAttachments ? "Attachments: yes\n" : ""}${unsubLine}\n\n---\n${r.body}`;
         return ok(text, { message: r.summary, to: r.to, body: r.body, truncated: r.truncated, hasAttachments: r.hasAttachments, ...(r.webLink ? { webLink: r.webLink } : {}), unsubscribe: u });
       }),
   );
@@ -112,16 +112,16 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
   server.registerTool(
     "mail_senders_summary",
     {
-      title: "Synthèse par expéditeur",
+      title: "Summary by sender",
       description:
-        "OUTIL CLÉ POUR LE TRI. Scanne tout un dossier (Inbox par défaut) et agrège les messages par expéditeur : nombre, non lus, dernier message, " +
-        "et pour les `top` premiers, la méthode de désabonnement disponible (oneClick / https / mailto). Trié par volume décroissant. " +
-        "Le scan est mis en cache pour la session. Utilisez ensuite mail_unsubscribe(lastMessageId) et mail_bulk_by_sender(address).",
+        "KEY TOOL FOR TRIAGE. Scans a whole folder (Inbox by default) and aggregates messages by sender: count, unread, latest message, " +
+        "and for the `top` senders the available unsubscribe method (oneClick / https / mailto). Sorted by volume. " +
+        "The scan is cached for the session. Follow up with mail_unsubscribe(lastMessageId) and mail_bulk_by_sender(address).",
       inputSchema: z
         .object({
-          folder: z.string().optional().describe("Dossier à analyser. Défaut : inbox"),
-          since: isoDate.optional().describe("Ne compter que les messages reçus depuis cette date"),
-          top: z.number().int().min(1).max(200).default(50).describe("Nombre d'expéditeurs à retourner (max 200)"),
+          folder: z.string().optional().describe("Folder to analyse. Default: inbox"),
+          since: isoDate.optional().describe("Only count messages received since this date"),
+          top: z.number().int().min(1).max(200).default(50).describe("Number of senders to return (max 200)"),
         })
         .strict(),
       outputSchema: z.object({
@@ -148,10 +148,10 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
         const r = await mail.sendersSummary(folder, normalizeDate(since), top);
         const lines = r.senders.map((s, i) => {
           const u = s.unsubscribe;
-          const method = u?.oneClick ? "un-clic" : u?.mailto ? "mailto" : u?.https ? "navigateur" : "aucun";
-          return `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} non lus), dernier ${s.lastReceived.slice(0, 10)} « ${s.lastSubject} » | désabo: ${method} | lastMessageId: \`${s.lastMessageId}\``;
+          const method = u?.oneClick ? "one-click" : u?.mailto ? "mailto" : u?.https ? "browser" : "none";
+          return `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} unread), latest ${s.lastReceived.slice(0, 10)} "${s.lastSubject}" | unsubscribe: ${method} | lastMessageId: \`${s.lastMessageId}\``;
         });
-        const text = `${r.scanned} messages scannés, ${r.totalSenders} expéditeurs. Top ${r.senders.length} :\n${lines.join("\n")}`;
+        const text = `${r.scanned} messages scanned, ${r.totalSenders} senders. Top ${r.senders.length}:\n${lines.join("\n")}`;
         return ok(text, r);
       }),
   );

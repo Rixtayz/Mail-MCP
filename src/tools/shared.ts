@@ -11,8 +11,8 @@ export async function run(body: () => Promise<CallToolResult>): Promise<CallTool
       err instanceof AuthError || err instanceof GraphError
         ? err.message
         : err instanceof Error
-          ? `Erreur : ${err.message}`
-          : `Erreur : ${String(err)}`;
+          ? `Error: ${err.message}`
+          : `Error: ${String(err)}`;
     return { content: [{ type: "text", text: message }], isError: true };
   }
 }

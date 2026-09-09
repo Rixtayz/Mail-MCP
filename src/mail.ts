@@ -117,7 +117,7 @@ export class MailService {
       folders.find((f) => f.wellKnownName?.toLowerCase() === lower);
     if (!match) {
       throw new Error(
-        `Dossier « ${nameOrId} » introuvable. Dossiers disponibles : ${folders.map((f) => f.path).join(", ")}. Utilisez mail_create_folder pour le créer.`,
+        `Folder "${nameOrId}" not found. Available folders: ${folders.map((f) => f.path).join(", ")}. Use mail_create_folder to create it.`,
       );
     }
     return match.id;
@@ -321,7 +321,7 @@ export class MailService {
       if (r.ok) return { ...base, method: "one-click", ok: true, url: info.https, detail: r.detail };
       if (info.mailto) {
         const viaMail = await this.unsubscribeByMail(info);
-        return { ...base, ...viaMail, detail: `${r.detail} Repli par courriel : ${viaMail.detail}` };
+        return { ...base, ...viaMail, detail: `${r.detail} Email fallback: ${viaMail.detail}` };
       }
       return { ...base, method: "browser", ok: false, url: info.https, detail: `${r.detail}` };
     }
@@ -329,13 +329,13 @@ export class MailService {
       return { ...base, ...(await this.unsubscribeByMail(info)) };
     }
     if (info.https) {
-      return { ...base, method: "browser", ok: false, url: info.https, detail: "Pas de un-clic : ouvrez cette URL dans le navigateur et confirmez le désabonnement." };
+      return { ...base, method: "browser", ok: false, url: info.https, detail: "No one-click support: open this URL in a browser and confirm the unsubscribe." };
     }
     return {
       ...base,
       method: "none",
       ok: false,
-      detail: "Aucun en-tête List-Unsubscribe. Cherchez un lien « unsubscribe / se désabonner » dans le corps via mail_get_message, ou supprimez l'expéditeur en masse avec mail_bulk_by_sender.",
+      detail: "No List-Unsubscribe header. Look for an unsubscribe link in the body via mail_get_message, or remove the sender in bulk with mail_bulk_by_sender.",
     };
   }
 
@@ -348,10 +348,10 @@ export class MailService {
         message: { subject, body: { contentType: "text", content }, toRecipients: [{ emailAddress: { address } }] },
         saveToSentItems: false,
       });
-      return { method: "mailto", ok: true, mailto: address, detail: `Courriel de désabonnement envoyé à ${address} (sujet « ${subject} »).` };
+      return { method: "mailto", ok: true, mailto: address, detail: `Unsubscribe email sent to ${address} (subject "${subject}").` };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { method: "mailto", ok: false, mailto: address, detail: `Envoi à ${address} échoué : ${msg}` };
+      return { method: "mailto", ok: false, mailto: address, detail: `Sending to ${address} failed: ${msg}` };
     }
   }
 }

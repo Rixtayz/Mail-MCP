@@ -85,15 +85,15 @@ export async function oneClickPost(
       signal: controller.signal,
     });
     if (res.status >= 200 && res.status < 300) {
-      return { ok: true, status: res.status, detail: `POST one-click accepté (HTTP ${res.status}).` };
+      return { ok: true, status: res.status, detail: `One-click POST accepted (HTTP ${res.status}).` };
     }
     if (res.status >= 300 && res.status < 400) {
-      return { ok: false, status: res.status, detail: `Le serveur a répondu par une redirection (HTTP ${res.status}), non conforme RFC 8058. Ouvrez l'URL dans un navigateur.` };
+      return { ok: false, status: res.status, detail: `The server answered with a redirect (HTTP ${res.status}), which is not RFC 8058 compliant. Open the URL in a browser.` };
     }
-    return { ok: false, status: res.status, detail: `POST one-click refusé (HTTP ${res.status}). Ouvrez l'URL dans un navigateur.` };
+    return { ok: false, status: res.status, detail: `One-click POST rejected (HTTP ${res.status}). Open the URL in a browser.` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, detail: `POST one-click impossible (${msg}). Ouvrez l'URL dans un navigateur.` };
+    return { ok: false, detail: `One-click POST failed (${msg}). Open the URL in a browser.` };
   } finally {
     clearTimeout(timer);
   }

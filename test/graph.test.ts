@@ -36,7 +36,7 @@ describe("GraphClient.request", () => {
 
   it("maps 404 to an actionable error", async () => {
     const { f } = mockFetch(() => json({ error: { code: "ErrorItemNotFound", message: "nope" } }, 404));
-    await expect(client(f).get("/me/messages/x")).rejects.toThrow(/Introuvable \(404\)/);
+    await expect(client(f).get("/me/messages/x")).rejects.toThrow(/Not found \(404\)/);
   });
 
   it("returns undefined on 204", async () => {
