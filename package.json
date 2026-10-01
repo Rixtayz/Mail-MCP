@@ -21,7 +21,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@azure/msal-node": "^6.0.0",
+    "@azure/msal-node": "^7.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "html-to-text": "^10.0.1",
     "open": "^11.0.2",
