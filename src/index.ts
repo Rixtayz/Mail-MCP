@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { VERSION } from "./constants.js";
 import { runLogin } from "./login.js";
 import { buildServer } from "./server.js";
 
@@ -13,8 +14,12 @@ if (command === "login") {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
+} else if (command === "--version" || command === "-v") {
+  console.error(VERSION);
 } else if (command === "--help" || command === "-h" || command === "help") {
-  console.error("Usage:\n  mail-mcp          start the MCP server on stdio\n  mail-mcp login    sign in to your Microsoft account once (needs MAIL_MCP_CLIENT_ID)");
+  console.error(
+    "Usage:\n  mail-mcp            start the MCP server on stdio\n  mail-mcp login      sign in to your Microsoft account once (needs MAIL_MCP_CLIENT_ID)\n  mail-mcp --version  print the version",
+  );
 } else {
   serveStdio(() => buildServer());
 }

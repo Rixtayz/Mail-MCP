@@ -34,6 +34,11 @@ describe("GraphClient.request", () => {
     expect(calls.length).toBe(3);
   });
 
+  it("maps 401 to the npx login command, which works without a clone", async () => {
+    const { f } = mockFetch(() => json({ error: { code: "InvalidAuthenticationToken", message: "nope" } }, 401));
+    await expect(client(f).get("/me")).rejects.toThrow("npx -y @rixtay/mail-mcp login");
+  });
+
   it("maps 404 to an actionable error", async () => {
     const { f } = mockFetch(() => json({ error: { code: "ErrorItemNotFound", message: "nope" } }, 404));
     await expect(client(f).get("/me/messages/x")).rejects.toThrow(/Not found \(404\)/);

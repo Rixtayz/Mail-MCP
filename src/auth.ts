@@ -2,7 +2,7 @@ import { PublicClientApplication, type AccountInfo, type ICachePlugin, type Toke
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { AUTHORITY, SCOPES } from "./constants.js";
+import { AUTHORITY, LOGIN_COMMAND, SCOPES } from "./constants.js";
 
 export class AuthError extends Error {}
 
@@ -63,7 +63,7 @@ export async function getAccessToken(): Promise<string> {
   const account = await getAccount();
   if (!account) {
     throw new AuthError(
-      "No account is signed in. Run `npm run login` in the Mail-MCP folder to sign in to your Outlook.com account once.",
+      `No account is signed in. Ask the user to run \`${LOGIN_COMMAND}\` once, with the same MAIL_MCP_CLIENT_ID, to sign in to their Outlook.com account.`,
     );
   }
   try {
@@ -71,7 +71,7 @@ export async function getAccessToken(): Promise<string> {
     return result.accessToken;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new AuthError(`Token expired or invalid (${msg.split("\n")[0]}). Run \`npm run login\` again in the Mail-MCP folder.`);
+    throw new AuthError(`Token expired or invalid (${msg.split("\n")[0]}). Ask the user to run \`${LOGIN_COMMAND}\` again.`);
   }
 }
 
