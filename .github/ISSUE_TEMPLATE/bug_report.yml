@@ -1,0 +1,64 @@
+name: Bug report
+description: A tool fails or returns the wrong result, sign-in fails, or the server misbehaves.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Please never paste email content, email addresses or anything from `~/.mail-mcp/`** (the token cache gives full access to your mailbox).
+        Replace senders, subjects and message ids with placeholders.
+        Could the server leak mail or tokens, or act on a message without being asked? Report it privately instead: see [SECURITY.md](https://github.com/Rixtayz/Mail-MCP/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you asked the assistant, which tool it called, what you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options:
+        - Sign-in (mail-mcp login)
+        - Reading / searching (mail_search, mail_get_message, mail_senders_summary, mail_list_folders)
+        - Filing / deleting (mail_move, mail_delete, mail_bulk_by_sender, mail_create_folder)
+        - Unsubscribing (mail_unsubscribe)
+        - Installation / npx / client configuration
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mail-MCP version
+      description: Output of `npx -y @rixtay/mail-mcp --version`.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      placeholder: "Claude Desktop 1.2, Claude Code 2.1.274, …"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS, Node.js version and account type
+      placeholder: "Windows 11, Node 24.1.0, outlook.com"
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Error message or tool result
+      description: The error text returned by the tool (for example `Graph error 400 (ErrorInvalidRequest)`), redacted as you see fit.
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This issue contains no email content, no email addresses and no token.
+          required: true

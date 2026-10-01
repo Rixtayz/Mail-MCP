@@ -1,5 +1,11 @@
 # Mail-MCP
 
+[![CI](https://github.com/Rixtayz/Mail-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/Rixtayz/Mail-MCP/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@rixtay/mail-mcp)](https://www.npmjs.com/package/@rixtay/mail-mcp)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933)](package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.Rixtayz%2Fmail--mcp-6f42c1)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.Rixtayz/mail-mcp)
+
 ![Mail-MCP: AI-powered inbox control for Outlook](docs/hero.png)
 
 A small, focused [MCP](https://modelcontextprotocol.io) server that lets Claude (Claude Desktop, Cowork, Claude Code or any MCP client) work on a **personal Outlook.com / Hotmail / Live mailbox** through Microsoft Graph: read and search mail, file it into folders, delete it, and **unsubscribe from newsletters**.
@@ -33,7 +39,7 @@ Design choices:
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 22 or newer.
 - A personal Microsoft account (outlook.com, hotmail.com, live.com, msn.com).
 - A free Microsoft Entra app registration (5 minutes, below). Password-based IMAP was switched off for personal accounts in September 2024, so an OAuth app is the only supported way in.
 
@@ -135,7 +141,6 @@ src/graph.ts          Graph client: bearer auth, 429/503 retry, pagination, $bat
 src/mail.ts           business logic (folders, search, sender summary, move/delete, unsubscribe cascade)
 src/unsubscribe.ts    List-Unsubscribe / List-Unsubscribe-Post parsing, RFC 8058 one-click POST
 src/tools/*.ts        tool definitions (zod v4 schemas, annotations)
-scripts/login.ts      one-time interactive sign-in
 ```
 
 Stack: `@modelcontextprotocol/server` v2, zod v4, `@azure/msal-node` v6, `html-to-text`.
@@ -148,6 +153,12 @@ Stack: `@modelcontextprotocol/server` v2, zod v4, `@azure/msal-node` v6, `html-t
 - `mail_search` with `query` (full text) cannot be combined with the other filters (Graph limitation) and tops out at a few hundred results.
 - Whether an unsubscribe actually takes effect is up to the sender. One-click and `mailto:` send the request; the assistant's browser handles the rest.
 - The authority is `login.microsoftonline.com/consumers`. With `common`, refresh tokens for personal accounts are rejected after the first refresh.
+
+## Contributing
+
+Bug reports, fixes and focused new tools are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Please never paste real email content, addresses or tokens in an issue. Found a way the server could leak mail or tokens, or act without being asked? Please report it privately, as described in [SECURITY.md](SECURITY.md).
+
+Release history: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

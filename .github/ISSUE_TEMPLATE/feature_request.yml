@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new tool, filter or cleanup workflow.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the inbox task you can't do with the current nine tools.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+      description: If it needs a Microsoft Graph endpoint or permission the server doesn't use yet, mention it.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: The feature keeps the server safe by default (destructive actions stay explicit, no generic "send email" tool).
+          required: true
