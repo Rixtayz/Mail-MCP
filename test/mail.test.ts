@@ -4,6 +4,9 @@ import { MailService } from "../src/mail.js";
 
 type Handler = (url: string, init: RequestInit) => unknown;
 
+/** Fake DNS: every hostname resolves to a public address. */
+const publicDns = async () => [{ address: "93.184.215.14", family: 4 }];
+
 /** Build a MailService whose Graph calls are answered by `route`. Returns the recorded calls. */
 function service(route: Handler, unsubFetch?: typeof fetch) {
   const calls: { url: string; init: RequestInit }[] = [];
@@ -14,7 +17,7 @@ function service(route: Handler, unsubFetch?: typeof fetch) {
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   const graph = new GraphClient({ getToken: async () => "t", fetchImpl: f, sleep: async () => {} });
-  return { mail: new MailService(graph, unsubFetch ?? f), calls };
+  return { mail: new MailService(graph, unsubFetch ?? f, publicDns), calls };
 }
 
 const folders = {
@@ -132,6 +135,31 @@ describe("MailService.unsubscribe", () => {
     const r = await mail.unsubscribe("m");
     expect(r).toMatchObject({ method: "one-click", ok: true, url: "https://x.example/u", from: "news@x.example" });
     expect(posted).toBe("https://x.example/u");
+  });
+
+  it("refuses one-click to a private address and falls back to mailto", async () => {
+    const posted: string[] = [];
+    const unsub = (async (url: string) => { posted.push(url); return new Response("", { status: 200 }); }) as unknown as typeof fetch;
+    let sent = false;
+    const { mail } = service((url) => {
+      if (url.endsWith("/me/sendMail")) { sent = true; return undefined; }
+      return message({ "List-Unsubscribe": "<https://192.168.1.1/unsub>, <mailto:stop@x.example>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" });
+    }, unsub);
+    const r = await mail.unsubscribe("m");
+    expect(posted).toEqual([]);
+    expect(sent).toBe(true);
+    expect(r).toMatchObject({ method: "mailto", ok: true, mailto: "stop@x.example" });
+    expect(r.detail).toContain("192.168.1.1");
+  });
+
+  it("refuses one-click to a loopback address and hands the URL to the browser when there is no mailto", async () => {
+    const posted: string[] = [];
+    const unsub = (async (url: string) => { posted.push(url); return new Response("", { status: 200 }); }) as unknown as typeof fetch;
+    const { mail } = service(() => message({ "List-Unsubscribe": "<https://[::1]/unsub>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), unsub);
+    const r = await mail.unsubscribe("m");
+    expect(posted).toEqual([]);
+    expect(r).toMatchObject({ method: "browser", ok: false, url: "https://[::1]/unsub" });
+    expect(r.detail).toMatch(/open the url in a browser instead/i);
   });
 
   it("mailto path sends a mail through Graph without saving to Sent Items", async () => {
