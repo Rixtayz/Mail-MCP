@@ -59,6 +59,19 @@ describe("parseListUnsubscribe", () => {
   });
 });
 
+/** Fake DNS: every hostname resolves to a public address. */
+const publicDns = async () => [{ address: "93.184.215.14", family: 4 }];
+
+/** fetch that answers 200 and records every URL it was asked to hit. */
+function recordingFetch() {
+  const urls: string[] = [];
+  const f = (async (u: string) => {
+    urls.push(u);
+    return new Response("ok", { status: 200 });
+  }) as unknown as typeof fetch;
+  return { f, urls };
+}
+
 describe("oneClickPost", () => {
   const mk = (status: number) => (async () => new Response(null, { status })) as unknown as typeof fetch;
 
@@ -68,7 +81,7 @@ describe("oneClickPost", () => {
       captured = init;
       return new Response("ok", { status: 200 });
     }) as unknown as typeof fetch;
-    const r = await oneClickPost("https://x.example/u", f);
+    const r = await oneClickPost("https://x.example/u", f, publicDns);
     expect(r.ok).toBe(true);
     expect(captured?.method).toBe("POST");
     expect(captured?.body).toBe("List-Unsubscribe=One-Click");
@@ -76,15 +89,106 @@ describe("oneClickPost", () => {
   });
 
   it("treats redirects as failure", async () => {
-    const r = await oneClickPost("https://x.example/u", mk(302));
+    const r = await oneClickPost("https://x.example/u", mk(302), publicDns);
     expect(r.ok).toBe(false);
     expect(r.status).toBe(302);
   });
 
   it("treats network errors as failure without throwing", async () => {
     const f = (async () => { throw new Error("ECONNRESET"); }) as unknown as typeof fetch;
-    const r = await oneClickPost("https://x.example/u", f);
+    const r = await oneClickPost("https://x.example/u", f, publicDns);
     expect(r.ok).toBe(false);
     expect(r.detail).toContain("ECONNRESET");
+  });
+});
+
+describe("oneClickPost destination guard", () => {
+  it.each([
+    "https://localhost/u",
+    "https://LOCALHOST./u",
+    "https://news.localhost/u",
+    "https://127.0.0.1/u",
+    "https://127.1/u",
+    "https://2130706433/u",
+    "https://0.0.0.0/u",
+    "https://10.1.2.3/u",
+    "https://172.16.0.1/u",
+    "https://172.31.255.254/u",
+    "https://192.168.1.1/u",
+    "https://169.254.169.254/latest/meta-data",
+    "https://100.64.0.1/u",
+    "https://224.0.0.251/u",
+    "https://255.255.255.255/u",
+    "https://[::1]/u",
+    "https://[::]/u",
+    "https://[::127.0.0.1]/u",
+    "https://[fd12:3456::1]/u",
+    "https://[fc00::1]/u",
+    "https://[fe80::1]/u",
+    "https://[fec0::1]/u",
+    "https://[ff02::1]/u",
+    "https://[::ffff:127.0.0.1]/u",
+    "https://[::ffff:192.168.1.1]/u",
+  ])("refuses %s without sending anything", async (url) => {
+    const { f, urls } = recordingFetch();
+    const r = await oneClickPost(url, f, publicDns);
+    expect(urls).toEqual([]);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/open the url in a browser instead/i);
+  });
+
+  it("refuses a hostname when any of its addresses is private", async () => {
+    const { f, urls } = recordingFetch();
+    const dns = async () => [{ address: "93.184.215.14", family: 4 }, { address: "192.168.1.1", family: 4 }];
+    const r = await oneClickPost("https://router.example/u", f, dns);
+    expect(urls).toEqual([]);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("192.168.1.1");
+    expect(r.detail).toMatch(/open the url in a browser instead/i);
+  });
+
+  it("refuses a hostname that resolves to an IPv6 unique local address", async () => {
+    const { f, urls } = recordingFetch();
+    const r = await oneClickPost("https://nas.example/u", f, async () => [{ address: "fd00::10", family: 6 }]);
+    expect(urls).toEqual([]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("refuses when the hostname cannot be resolved", async () => {
+    const { f, urls } = recordingFetch();
+    const dns = async () => { throw new Error("getaddrinfo ENOTFOUND nowhere.example"); };
+    const r = await oneClickPost("https://nowhere.example/u", f, dns);
+    expect(urls).toEqual([]);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("ENOTFOUND");
+    expect(r.detail).toMatch(/open the url in a browser instead/i);
+  });
+
+  it("refuses a URL whose host cannot be parsed", async () => {
+    const { f, urls } = recordingFetch();
+    const r = await oneClickPost("https://[zz]/u", f, publicDns);
+    expect(urls).toEqual([]);
+    expect(r.ok).toBe(false);
+  });
+
+  it("posts to a public hostname after resolving that hostname", async () => {
+    const { f, urls } = recordingFetch();
+    const asked: string[] = [];
+    const dns = async (host: string) => { asked.push(host); return publicDns(); };
+    const r = await oneClickPost("https://Example.com:8443/u?t=1", f, dns);
+    expect(asked).toEqual(["example.com"]);
+    expect(urls).toEqual(["https://Example.com:8443/u?t=1"]);
+    expect(r.ok).toBe(true);
+  });
+
+  it.each([
+    "https://1.1.1.1/u",
+    "https://172.32.0.1/u",
+    "https://[2606:4700:4700::1111]/u",
+  ])("posts to the public address %s", async (url) => {
+    const { f, urls } = recordingFetch();
+    const r = await oneClickPost(url, f, publicDns);
+    expect(urls).toEqual([url]);
+    expect(r.ok).toBe(true);
   });
 });

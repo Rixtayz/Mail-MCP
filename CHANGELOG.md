@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+
+- `mail_unsubscribe` no longer sends the one-click POST to a host that is, or resolves to, a loopback, private, link-local or other non-public address (`localhost`, `127.0.0.1`, `10.x`, `192.168.x`, `169.254.x`, `[::1]`, `fd00::`…). The `List-Unsubscribe` URL is chosen by the sender, so a newsletter could otherwise make your machine POST to your router or a local service. Such links now fall back to `mailto:`, or to a URL for the browser.
+
 ## [0.1.1] - 2026-10-01
 
 ### Added

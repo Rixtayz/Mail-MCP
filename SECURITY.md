@@ -10,7 +10,7 @@ A break in any of those promises is treated as a security issue.
 - The token cache written with permissions wider than owner-only, or outside `~/.mail-mcp/` / `MAIL_MCP_CACHE_PATH`.
 - A way to send an email to an arbitrary recipient, with arbitrary content, through any tool (the `Mail.Send` permission is meant for `mailto:` unsubscribe requests only).
 - A permanent deletion that happens without `permanent: true`, or a bulk action that ignores `dryRun`.
-- A network request triggered by message content other than the documented RFC 8058 one-click unsubscribe POST.
+- A network request triggered by message content other than the documented RFC 8058 one-click unsubscribe POST, or a one-click POST that reaches a loopback, private or link-local address.
 - A dependency vulnerability that is actually reachable from this server.
 
 Prompt injection through email content (a message that tells the assistant to delete everything) is a known risk of every mail-connected assistant. Reports are welcome when the server makes it worse, for example through a wrong `destructiveHint` annotation.

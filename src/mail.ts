@@ -2,7 +2,7 @@ import { PAGE_SIZE_SCAN } from "./constants.js";
 import { bodyToText, summarizeMessage, truncate, type MessageSummary } from "./format.js";
 import { GraphClient, odataString } from "./graph.js";
 import type { BatchRequest, GraphHeader, GraphMailFolder, GraphMessage, UnsubscribeInfo } from "./types.js";
-import { oneClickPost, parseListUnsubscribe } from "./unsubscribe.js";
+import { oneClickPost, parseListUnsubscribe, type HostResolver } from "./unsubscribe.js";
 
 const WELL_KNOWN = new Set(["inbox", "drafts", "sentitems", "deleteditems", "junkemail", "archive", "outbox"]);
 const LIST_SELECT = "id,subject,from,receivedDateTime,isRead,bodyPreview";
@@ -77,6 +77,8 @@ export class MailService {
   constructor(
     private readonly graph: GraphClient,
     private readonly fetchImpl: typeof fetch = fetch,
+    /** DNS resolver used to vet one-click unsubscribe hosts; defaults to dns.lookup. */
+    private readonly resolveHost?: HostResolver,
   ) {}
 
   // ---------- Folders ----------
@@ -317,7 +319,7 @@ export class MailService {
     const base = { from: m.from?.emailAddress?.address ?? "", subject: m.subject ?? "" };
 
     if (info.oneClick && info.https) {
-      const r = await oneClickPost(info.https, this.fetchImpl);
+      const r = await oneClickPost(info.https, this.fetchImpl, this.resolveHost);
       if (r.ok) return { ...base, method: "one-click", ok: true, url: info.https, detail: r.detail };
       if (info.mailto) {
         const viaMail = await this.unsubscribeByMail(info);
