@@ -1,6 +1,7 @@
 {
   "name": "@rixtay/mail-mcp",
-  "version": "0.1.0",
+  "mcpName": "io.github.Rixtayz/mail-mcp",
+  "version": "0.1.1",
   "description": "MCP server for a personal Outlook.com / Hotmail mailbox: read, search, file, delete and unsubscribe from newsletters via Microsoft Graph.",
   "type": "module",
   "bin": {
@@ -16,7 +17,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT",
   "dependencies": {
@@ -36,12 +37,15 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "mcp-server",
     "outlook",
     "hotmail",
     "microsoft-graph",
     "email",
     "unsubscribe",
-    "claude"
+    "claude",
+    "newsletter",
+    "inbox-zero"
   ],
   "author": "Rixtayz",
   "repository": {
@@ -56,5 +60,8 @@
     "dist",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

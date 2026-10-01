@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Rixtayz/mail-mcp",
+  "title": "Mail-MCP",
+  "description": "Personal Outlook.com / Hotmail inbox: read, search, file, delete, unsubscribe via Microsoft Graph.",
+  "websiteUrl": "https://github.com/Rixtayz/Mail-MCP#readme",
+  "repository": {
+    "url": "https://github.com/Rixtayz/Mail-MCP",
+    "source": "github"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@rixtay/mail-mcp",
+      "version": "0.1.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MAIL_MCP_CLIENT_ID",
+          "description": "Application (client) ID of your Microsoft Entra app registration (see README). Run `npx -y @rixtay/mail-mcp login` once to sign in.",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "MAIL_MCP_CACHE_PATH",
+          "description": "Token cache location. Defaults to ~/.mail-mcp/token-cache.json.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}

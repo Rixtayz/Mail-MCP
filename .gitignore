@@ -2,3 +2,9 @@ node_modules/
 dist/
 .env
 *.log
+*.tgz
+
+# mcp-publisher binary, if downloaded into the project folder
+mcp-publisher.exe
+mcp-publisher
+mcp-publisher.tar.gz
