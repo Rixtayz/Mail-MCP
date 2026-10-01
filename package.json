@@ -1,7 +1,7 @@
 {
   "name": "@rixtay/mail-mcp",
   "mcpName": "io.github.Rixtayz/mail-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server for a personal Outlook.com / Hotmail mailbox: read, search, file, delete and unsubscribe from newsletters via Microsoft Graph.",
   "type": "module",
   "bin": {

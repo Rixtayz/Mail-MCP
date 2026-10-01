@@ -4,9 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-01
+
 ### Security
 
 - `mail_unsubscribe` no longer sends the one-click POST to a host that is, or resolves to, a loopback, private, link-local or other non-public address (`localhost`, `127.0.0.1`, `10.x`, `192.168.x`, `169.254.x`, `[::1]`, `fd00::`…). The `List-Unsubscribe` URL is chosen by the sender, so a newsletter could otherwise make your machine POST to your router or a local service. Such links now fall back to `mailto:`, or to a URL for the browser.
+
+### Changed
+
+- Dependencies: `@azure/msal-node` 7, whose browser sign-in now returns through `form_post` (checked with a personal Outlook.com account), and `@modelcontextprotocol/server` 2.1.
 
 ## [0.1.1] - 2026-10-01
 
@@ -35,6 +41,7 @@ First public release.
 - Unsubscribe cascade: RFC 8058 one-click POST, then `mailto:`, then a URL for the assistant's browser.
 - Safe defaults: deletion moves to Deleted Items, `permanent: true` to purge, `dryRun` on bulk actions, MCP annotations on every tool.
 
-[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Rixtayz/Mail-MCP/releases/tag/v0.1.0
