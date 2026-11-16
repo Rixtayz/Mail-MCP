@@ -11,12 +11,16 @@ export interface SessionService {
   logout(): Promise<{ account?: string }>;
 }
 
-/** The real service: one LoginFlow per process, so overlapping mail_login calls share a single browser sign-in. */
+/**
+ * The real service. Each call makes its own LoginFlow, and buildServer() calls it once per server,
+ * so overlapping mail_login calls to one server share a single browser sign-in.
+ */
 export function createSessionService(): SessionService {
   const flow = new LoginFlow({
     signedInAccount,
     loginInteractive,
-    // Resolves once the browser launcher has started; `open` does not wait for the browser to exit.
+    // `open` never waits for the browser itself. It resolves once the launcher has started, or on Windows once
+    // the PowerShell launcher has exited, which it does as soon as it has started the browser.
     openBrowser: async (url) => {
       await open(url);
     },
