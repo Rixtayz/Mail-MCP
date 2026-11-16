@@ -18,6 +18,9 @@ export interface GraphClientOptions {
   baseUrl?: string;
 }
 
+// Never echoes the rejected URL: it is attacker-chosen text that would land in the assistant's context.
+const OUTSIDE_GRAPH = "Refused to call a URL outside Microsoft Graph. Pass back the cursor exactly as mail_search returned it.";
+
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // mail_login answers "Signed in" as long as a token can be had silently, so after a 401 or 403 a new
@@ -61,9 +64,31 @@ export class GraphClient {
     this.baseUrl = opts.baseUrl ?? GRAPH_BASE;
   }
 
-  /** Absolute URL for a Graph path (or pass-through for a full nextLink URL). */
+  /**
+   * Absolute URL for a Graph path, or a full nextLink URL. The only choke point before the bearer token is
+   * attached: an absolute URL is accepted only when it is under the base URL (parsed, not prefix-matched).
+   */
   private url(pathOrUrl: string): string {
-    return /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${this.baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+    if (!/^https?:\/\//i.test(pathOrUrl)) {
+      return `${this.baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+    }
+    let target: URL;
+    try {
+      target = new URL(pathOrUrl);
+    } catch {
+      throw new GraphError(OUTSIDE_GRAPH, 0);
+    }
+    const base = new URL(this.baseUrl);
+    const basePath = base.pathname.replace(/\/+$/, "");
+    const inside =
+      target.protocol === base.protocol &&
+      target.hostname === base.hostname &&
+      target.port === base.port &&
+      target.username === "" &&
+      target.password === "" &&
+      (target.pathname === basePath || target.pathname.startsWith(`${basePath}/`));
+    if (!inside) throw new GraphError(OUTSIDE_GRAPH, 0);
+    return target.href;
   }
 
   /** Perform a request with bearer auth and retry on 429/503/504. Returns parsed JSON (or undefined for 204). */
@@ -73,10 +98,11 @@ export class GraphClient {
     body?: unknown,
     extraHeaders: Record<string, string> = {},
   ): Promise<T> {
+    const url = this.url(pathOrUrl); // refuses a foreign URL before a token is even requested
     let attempt = 0;
     for (;;) {
       const token = await this.getToken();
-      const res = await this.fetchImpl(this.url(pathOrUrl), {
+      const res = await this.fetchImpl(url, {
         method,
         headers: {
           Authorization: `Bearer ${token}`,

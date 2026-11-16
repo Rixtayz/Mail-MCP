@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { InMemoryTransport, type JSONRPCMessage } from "@modelcontextprotocol/server";
 import { describe, expect, it } from "vitest";
 import { VERSION } from "../src/constants.js";
-import type { MailService } from "../src/mail.js";
+import { GraphClient } from "../src/graph.js";
+import { MailService as MailServiceImpl, type MailService } from "../src/mail.js";
 import { buildServer } from "../src/server.js";
 import type { SessionService } from "../src/tools/session.js";
 import type { UnsubscribeInfo } from "../src/types.js";
@@ -76,6 +77,27 @@ describe("mail_senders_summary over the wire", () => {
     const list = await request("tools/list");
     const description = (list.result?.tools as { name: string; description: string }[]).find((t) => t.name === "mail_senders_summary")?.description;
     expect(description).toMatch(/one-click, browser .*mailto .*or none/);
+    await close();
+  });
+});
+
+describe("mail_search cursor", () => {
+  it("refuses a cursor that points outside Microsoft Graph and makes no request", async () => {
+    const urls: string[] = [];
+    const f = (async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const graph = new GraphClient({ getToken: async () => "tok", fetchImpl: f, sleep: async () => {} });
+    const mail = new MailServiceImpl(graph, f);
+    const { request, close } = await connect(fakeSession(), mail);
+    const res = await request("tools/call", { name: "mail_search", arguments: { cursor: "https://attacker.example/steal" } });
+    expect(res.result?.isError).toBe(true);
+    expect(res.result?.content[0].text).toBe(
+      "Refused to call a URL outside Microsoft Graph. Pass back the cursor exactly as mail_search returned it.",
+    );
+    expect(urls.filter((u) => !u.startsWith("https://graph.microsoft.com/v1.0/"))).toEqual([]);
+    expect(urls).toEqual([]);
     await close();
   });
 });

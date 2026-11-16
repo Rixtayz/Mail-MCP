@@ -95,6 +95,62 @@ describe("GraphClient.paginate", () => {
   });
 });
 
+const REFUSED = "Refused to call a URL outside Microsoft Graph. Pass back the cursor exactly as mail_search returned it.";
+
+describe("GraphClient never sends the token outside Microsoft Graph", () => {
+  const hostile = [
+    "https://attacker.example/x",
+    "https://graph.microsoft.com.attacker.example/v1.0/me/messages",
+    "https://graph.microsoft.com/v1.0@attacker.example/me",
+    "https://user:pass@graph.microsoft.com/v1.0/me",
+    "https://graph.microsoft.com:8443/v1.0/me",
+    "http://graph.microsoft.com/v1.0/me",
+    "https://graph.microsoft.com/beta/me",
+    "https://graph.microsoft.com/v1.0evil/me",
+  ];
+
+  it.each(hostile)("refuses %s before any network call, without echoing it", async (url) => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    const err = await client(f).get(url).then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(REFUSED);
+    expect(err?.message).not.toContain("attacker");
+    expect(err?.message).not.toContain("tok");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("accepts a real Graph URL whatever the case of scheme and host, and fetches the normalised URL", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    await client(f).get("HTTPS://GRAPH.MICROSOFT.COM/v1.0/me");
+    expect(calls.map((c) => c.url)).toEqual(["https://graph.microsoft.com/v1.0/me"]);
+  });
+
+  it("keeps relative paths working", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    await client(f).get("me/messages?$top=1");
+    expect(calls[0]?.url).toBe("https://graph.microsoft.com/v1.0/me/messages?$top=1");
+  });
+
+  it("follows a real @odata.nextLink in paginate", async () => {
+    const next = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$skip=50&$top=50";
+    const { f, calls } = mockFetch((_c, n) => (n === 1 ? json({ value: [1], "@odata.nextLink": next }) : json({ value: [2] })));
+    const out: number[] = [];
+    for await (const x of client(f).paginate<number>("/me/messages")) out.push(x);
+    expect(out).toEqual([1, 2]);
+    expect(calls[1]?.url).toBe(next);
+  });
+
+  it("stops paginating on a hostile @odata.nextLink and never fetches it", async () => {
+    const { f, calls } = mockFetch((_c, n) => (n === 1 ? json({ value: [1], "@odata.nextLink": "https://attacker.example/steal" }) : json({ value: [2] })));
+    const out: number[] = [];
+    const run = async () => {
+      for await (const x of client(f).paginate<number>("/me/messages")) out.push(x);
+    };
+    await expect(run()).rejects.toThrow(REFUSED);
+    expect(out).toEqual([1]);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("GraphClient.batch", () => {
   it("chunks into 20, preserves order, and retries throttled sub-requests", async () => {
     let batchCalls = 0;

@@ -36,6 +36,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Security
 
 - Upgraded `@azure/msal-node` to 7.2.2 (GHSA-xcx6-jx8p-x3h5), `@modelcontextprotocol/server` to 2.4.0 (GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq) and `zod` to 4.6.7 (GHSA-mrhx-c7xc-m3w5).
+- `mail_search` no longer follows a `cursor` (or a `@odata.nextLink`) that points outside Microsoft Graph. A crafted cursor could make 0.1.x send the access token to another host.
 
 ## [0.1.2] - 2026-10-01
 
