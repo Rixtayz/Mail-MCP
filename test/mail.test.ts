@@ -1,7 +1,14 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
 import { MailService } from "../src/mail.js";
+import { buildMailtoUrl } from "../src/unsubscribe.js";
+
+// The real buildMailtoUrl, wrapped so that one test can make it fail. Every other call passes through.
+vi.mock("../src/unsubscribe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/unsubscribe.js")>();
+  return { ...actual, buildMailtoUrl: vi.fn(actual.buildMailtoUrl) };
+});
 
 type Handler = (url: string, init: RequestInit) => unknown;
 
@@ -183,6 +190,38 @@ describe("MailService.unsubscribe", () => {
   it("no header → none", async () => {
     const { mail } = service(() => message({}));
     expect((await mail.unsubscribe("m")).method).toBe("none");
+  });
+
+  describe("with a mailto subject cut inside an emoji at the 200-character limit", () => {
+    const emojiSubject = encodeURIComponent("a" + "😀".repeat(150));
+    const unsub = (async () => new Response("", { status: 200 })) as unknown as typeof fetch;
+
+    it("one-click still goes through", async () => {
+      const { mail } = service(() => message({ "List-Unsubscribe": `<https://x.example/u>, <mailto:stop@x.example?subject=${emojiSubject}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), unsub);
+      expect(await mail.unsubscribe("m")).toMatchObject({ method: "one-click", ok: true, url: "https://x.example/u" });
+    });
+
+    it("the browser fallback still hands over a mailto link", async () => {
+      const { mail } = service(() => message({ "List-Unsubscribe": `<https://x.example/page>, <mailto:stop@x.example?subject=${emojiSubject}>` }), neverPost);
+      const r = await mail.unsubscribe("m");
+      expect(r).toMatchObject({ method: "browser", ok: false, url: "https://x.example/page", mailto: "stop@x.example" });
+      expect(new URLSearchParams(r.mailtoUrl?.split("?")[1]).get("subject")).toBe("a" + "😀".repeat(99));
+    });
+  });
+
+  it("a mailto link that cannot be built never blocks the one-click POST", async () => {
+    vi.mocked(buildMailtoUrl).mockImplementationOnce(() => {
+      throw new URIError("URI malformed");
+    });
+    try {
+      let posted = "";
+      const unsub = (async (url: string) => { posted = url; return new Response("", { status: 200 }); }) as unknown as typeof fetch;
+      const { mail } = service(() => message({ "List-Unsubscribe": "<https://x.example/u>, <mailto:stop@x.example>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), unsub);
+      expect(await mail.unsubscribe("m")).toMatchObject({ method: "one-click", ok: true });
+      expect(posted).toBe("https://x.example/u");
+    } finally {
+      vi.mocked(buildMailtoUrl).mockReset(); // drops the failure if it was never used, back to the real function
+    }
   });
 });
 

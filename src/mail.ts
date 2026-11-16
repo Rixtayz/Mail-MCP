@@ -319,8 +319,6 @@ export class MailService {
     const m = await this.graph.get<GraphMessage>(`/me/messages/${encodeURIComponent(id)}?$select=id,subject,from,internetMessageHeaders`);
     const info = parseListUnsubscribe(m.internetMessageHeaders);
     const base = { from: m.from?.emailAddress?.address ?? "", subject: m.subject ?? "" };
-    const mailtoUrl = buildMailtoUrl(info);
-    const mailtoFields = info.mailto && mailtoUrl ? { mailto: info.mailto, mailtoUrl } : {};
 
     let oneClickFailure: string | undefined;
     if (info.oneClick && info.https) {
@@ -328,6 +326,9 @@ export class MailService {
       if (r.ok) return { ...base, method: "one-click", ok: true, url: info.https, detail: r.detail };
       oneClickFailure = r.detail;
     }
+    // Built only once one-click is out of the picture: nothing about the mailto link can stand in its way.
+    const mailtoUrl = buildMailtoUrl(info);
+    const mailtoFields = info.mailto && mailtoUrl ? { mailto: info.mailto, mailtoUrl } : {};
     if (info.https) {
       return {
         ...base,

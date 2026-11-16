@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../src/constants.js";
 import { buildMailtoUrl, oneClickPost, parseListUnsubscribe, splitListUnsubscribe } from "../src/unsubscribe.js";
 
 const h = (name: string, value: string) => ({ name, value });
@@ -86,6 +87,7 @@ describe("oneClickPost", () => {
     expect(captured?.method).toBe("POST");
     expect(captured?.body).toBe("List-Unsubscribe=One-Click");
     expect(captured?.redirect).toBe("manual");
+    expect((captured?.headers as Record<string, string>)["User-Agent"]).toBe(`mail-mcp/${VERSION}`);
   });
 
   it("treats redirects as failure", async () => {
@@ -235,5 +237,26 @@ describe("buildMailtoUrl", () => {
     const q = new URLSearchParams(url.split("?")[1]);
     expect(q.get("subject")).toHaveLength(200);
     expect(q.get("body")).toHaveLength(1000);
+  });
+  it("never cuts an emoji in half at the subject or body limit", () => {
+    // Each emoji is two UTF-16 units, so after the leading "a" both limits fall inside one; half an emoji makes encodeURIComponent throw.
+    const subject = "a" + "😀".repeat(150);
+    const body = "a" + "😀".repeat(600);
+    const info = parseListUnsubscribe([
+      { name: "List-Unsubscribe", value: `<mailto:stop@x.example?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}>` },
+    ]);
+    expect(info.mailtoSubject).toBe(subject);
+    const url = buildMailtoUrl(info)!;
+    const q = new URLSearchParams(url.split("?")[1]);
+    expect(q.get("subject")).toBe("a" + "😀".repeat(99));
+    expect(q.get("body")).toBe("a" + "😀".repeat(499));
+  });
+  it("does not throw on a lone surrogate anywhere, and replaces it", () => {
+    const url = buildMailtoUrl({ oneClick: false, mailto: "st\uD800op@x.example", mailtoSubject: "a\uD800b", mailtoBody: "\uDC00c" });
+    expect(url).toBe("mailto:st%EF%BF%BDop@x.example?subject=a%EF%BF%BDb&body=%EF%BF%BDc");
+  });
+  it("treats an address holding a lone surrogate as no mailto target", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:st\uD800op@x.example>" }]);
+    expect(info.mailto).toBeUndefined();
   });
 });
