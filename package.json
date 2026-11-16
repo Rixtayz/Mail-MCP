@@ -14,7 +14,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "inspect": "npx @modelcontextprotocol/inspector@latest node dist/index.js",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "build:mcpb": "node scripts/build-mcpb.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -28,6 +29,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/html-to-text": "^9.0.4",
     "@types/node": "^26.5.0",
     "tsx": "^4.23.13",

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "0.3",
+  "name": "mail-mcp",
+  "display_name": "Mail-MCP (Outlook.com / Hotmail)",
+  "version": "0.1.2",
+  "description": "Read, search, file, delete and unsubscribe from newsletters in a personal Outlook.com / Hotmail mailbox.",
+  "long_description": "Mail-MCP lets Claude triage a personal Outlook.com or Hotmail mailbox through Microsoft Graph: list folders, search and read messages, summarise senders, move or delete messages, and unsubscribe from mailing lists. Claude signs you in from the chat; nothing is sent anywhere except to Microsoft.",
+  "author": {
+    "name": "Rixtayz"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rixtayz/Mail-MCP"
+  },
+  "homepage": "https://github.com/Rixtayz/Mail-MCP#readme",
+  "support": "https://github.com/Rixtayz/Mail-MCP/issues",
+  "privacy_policies": ["https://github.com/Rixtayz/Mail-MCP/blob/main/PRIVACY.md"],
+  "keywords": ["outlook", "hotmail", "email", "microsoft-graph", "newsletter", "unsubscribe"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "MAIL_MCP_CLIENT_ID": "${user_config.client_id}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "mail_list_folders", "description": "List every folder of the mailbox with its path, message count and unread count." },
+    { "name": "mail_create_folder", "description": "Create a mail folder at the root or under a parent folder (idempotent)." },
+    { "name": "mail_search", "description": "List or search messages of a folder, newest first, with sender, date and unread filters." },
+    { "name": "mail_get_message", "description": "Read one message in full, with the unsubscribe options found in its headers." },
+    { "name": "mail_senders_summary", "description": "Scan a folder and aggregate messages by sender, with the available unsubscribe method." },
+    { "name": "mail_move", "description": "Move one or more messages to a folder." },
+    { "name": "mail_delete", "description": "Delete one or more messages (to Deleted Items by default)." },
+    { "name": "mail_bulk_by_sender", "description": "Move or delete every message from one sender in a folder, with a dry-run option." },
+    { "name": "mail_unsubscribe", "description": "Unsubscribe from the mailing list of a message (one-click, link or email)." },
+    { "name": "mail_login", "description": "Sign in to the Outlook.com mailbox through the browser." },
+    { "name": "mail_logout", "description": "Sign out and remove the sign-in stored on this computer." }
+  ],
+  "user_config": {
+    "client_id": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "title": "Your own Entra client ID (advanced)",
+      "description": "Leave empty to use the built-in Mail-MCP app."
+    }
+  }
+}
