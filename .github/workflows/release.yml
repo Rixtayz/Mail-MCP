@@ -30,6 +30,11 @@ jobs:
           node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
+      # Checked here, before publishing: once the version is on npm, a missing or empty
+      # CHANGELOG section would fail the bundle job, and re-running it would fail again.
+      - name: Check the changelog section for this version
+        run: node scripts/release-notes.mjs "$RUNNER_TEMP/release-notes.md"
+
       # Trusted publishing needs npm 11.5.1 or later. Upgrade if the runner's is older.
       - name: Make sure npm supports trusted publishing
         run: |
@@ -64,26 +69,9 @@ jobs:
       - run: npm run build
       - run: npm run build:mcpb
 
+      # Same commit as the npm job, which already checked this section, so this cannot fail on its own.
       - name: Extract the changelog section for this version
-        run: |
-          node -e '
-            const fs = require("fs");
-            const version = require("./package.json").version;
-            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
-            const start = lines.findIndex((l) => l.startsWith(`## [${version}]`));
-            if (start === -1) {
-              console.error(`CHANGELOG.md has no section for ${version}.`);
-              process.exit(1);
-            }
-            let end = lines.findIndex((l, i) => i > start && l.startsWith("## "));
-            if (end === -1) end = lines.length;
-            const notes = lines.slice(start + 1, end).join("\n").trim();
-            if (!notes) {
-              console.error(`The CHANGELOG.md section for ${version} is empty.`);
-              process.exit(1);
-            }
-            fs.writeFileSync("release-notes.md", notes + "\n");
-          '
+        run: node scripts/release-notes.mjs release-notes.md
 
       - name: Create the GitHub release
         env:
