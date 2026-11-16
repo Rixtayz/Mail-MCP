@@ -21,12 +21,22 @@ export function splitListUnsubscribe(value: string): string[] {
   return out;
 }
 
+/** True for one plain address: no list separator, whitespace, control or URI/header delimiter, exactly one `@`. */
+function isSingleAddress(address: string): boolean {
+  return address.length <= 254 && !/[\s\x00-\x1f\x7f,;<>"?&%]/.test(address) && address.split("@").length === 2 && !address.startsWith("@") && !address.endsWith("@");
+}
+
 function parseMailto(uri: string): { address: string; subject?: string; body?: string } | undefined {
   if (!/^mailto:/i.test(uri)) return undefined;
   const rest = uri.slice("mailto:".length);
   const [addrPart, query = ""] = rest.split("?", 2);
-  const address = decodeURIComponent(addrPart ?? "").trim();
-  if (!address) return undefined;
+  let address: string;
+  try {
+    address = decodeURIComponent(addrPart ?? "").trim();
+  } catch {
+    return undefined;
+  }
+  if (!isSingleAddress(address)) return undefined;
   const params = new URLSearchParams(query);
   const subject = params.get("subject") ?? undefined;
   const body = params.get("body") ?? undefined;

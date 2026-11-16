@@ -210,7 +210,25 @@ describe("buildMailtoUrl", () => {
     expect(url).toBe("mailto:stop@x.example?subject=s");
   });
   it("encodes an address that tries to smuggle a query", () => {
-    expect(buildMailtoUrl({ oneClick: false, mailto: "a@x.example?cc=v@y.example" })).not.toContain("?cc=");
+    expect(buildMailtoUrl({ oneClick: false, mailto: "a@x.example?cc=v@y.example" })).toBe("mailto:a@x.example%3Fcc%3Dv@y.example?subject=unsubscribe");
+  });
+  it("yields the exact URL for a normal address through the parser", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:stop@x.example>" }]);
+    expect(buildMailtoUrl(info)).toBe("mailto:stop@x.example?subject=unsubscribe");
+  });
+  it.each([
+    ["an encoded comma", "a@x.example%2Cvictim@y.example"],
+    ["an encoded CRLF", "a@x.example%0D%0Abcc:v@y.example"],
+    ["an encoded space", "a@x.example%20v@y.example"],
+    ["an encoded question mark", "a@x.example%3Fcc=v@y.example"],
+    ["an encoded ampersand", "a@x.example%26cc=v@y.example"],
+    ["two at signs", "a@b@x.example"],
+    ["no at sign", "stop.x.example"],
+    ["an address over 254 characters", `${"a".repeat(250)}@x.example`],
+  ])("treats %s in the address as no mailto target", (_label, address) => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: `<mailto:${address}>` }]);
+    expect(info.mailto).toBeUndefined();
+    expect(buildMailtoUrl(info)).toBeUndefined();
   });
   it("caps subject at 200 characters and body at 1000", () => {
     const url = buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "s".repeat(500), mailtoBody: "b".repeat(5000) })!;
