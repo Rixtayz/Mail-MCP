@@ -100,9 +100,15 @@ export class LoginFlow {
   }
 }
 
-const CANCEL_BODY = "error=login_timeout&error_description=Sign-in+was+not+completed+in+time";
+/** The OAuth error MSAL's loopback server is handed to end a sign-in nobody finished. */
+function cancelBody(state: string | null): string {
+  const params = new URLSearchParams({ error: "login_timeout", error_description: "Sign-in was not completed in time" });
+  // msal-node 7.2 ignores a callback whose state is not the one of the pending request, so echo it back.
+  if (state) params.set("state", state);
+  return params.toString();
+}
 
-/** Ends an abandoned MSAL loopback sign-in by posting an OAuth error to its redirect URI. */
+/** Ends an abandoned MSAL loopback sign-in by posting an OAuth error (carrying the request's state) to its redirect URI. */
 export async function cancelLoopback(authUrl: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   const port = loopbackPort(authUrl);
   if (port === undefined) return;
@@ -110,7 +116,7 @@ export async function cancelLoopback(authUrl: string, fetchImpl: typeof fetch = 
   const res = await fetchImpl(`http://127.0.0.1:${port}/`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: CANCEL_BODY,
+    body: cancelBody(new URL(authUrl).searchParams.get("state")),
     signal: AbortSignal.timeout(5_000),
   });
   await res.body?.cancel();

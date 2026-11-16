@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - A 403 from Microsoft now tells the assistant to call `mail_login` instead of a terminal command.
 - Sign-in always shows Microsoft's account picker, so you choose which account Mail-MCP uses.
 
+### Security
+
+- Upgraded `@azure/msal-node` to 7.2.2 (GHSA-xcx6-jx8p-x3h5), `@modelcontextprotocol/server` to 2.4.0 (GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq) and `zod` to 4.6.7 (GHSA-mrhx-c7xc-m3w5).
+
 ### Fixed
 
 - Signing out with `mail-mcp logout` while a server is running now signs that server out too, instead of letting it restore the old sign-in on its next write.

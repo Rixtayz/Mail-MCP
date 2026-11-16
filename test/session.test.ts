@@ -202,6 +202,13 @@ describe("cancelLoopback", () => {
     expect(String(seen[0]!.init.body)).toContain("error=login_timeout");
   });
 
+  it("echoes the state of the authorization request, which MSAL requires to accept the callback", async () => {
+    const seen: string[] = [];
+    await cancelLoopback(`${URL_A}&state=abc%3D%3Ddef`, (async (_url: string, init: RequestInit) => { seen.push(String(init.body)); return new Response(""); }) as unknown as typeof fetch);
+    expect(new URLSearchParams(seen[0]).get("state")).toBe("abc==def");
+    expect(new URLSearchParams(seen[0]).get("error")).toBe("login_timeout");
+  });
+
   it("refuses a redirect URI that is not loopback", async () => {
     let called = false;
     await cancelLoopback("https://login.microsoftonline.com/x?redirect_uri=https%3A%2F%2Fevil.example%2F", (async () => { called = true; return new Response(""); }) as unknown as typeof fetch);
