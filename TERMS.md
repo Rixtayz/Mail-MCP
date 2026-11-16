@@ -1,6 +1,6 @@
 # Terms of use
 
-Mail-MCP is free, open-source software published by Les Solutions Devforge inc and its contributors, at <https://github.com/Rixtayz/Mail-MCP>.
+Mail-MCP is free, open-source software published by Rixtayz and its contributors, at <https://github.com/Rixtayz/Mail-MCP>.
 
 ## Licence
 

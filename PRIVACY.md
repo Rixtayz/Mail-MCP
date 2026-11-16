@@ -4,7 +4,9 @@ Mail-MCP is open-source software that lets an AI assistant work on your personal
 
 ## Who publishes it
 
-The Microsoft app that signs you in, named Mail-MCP, is registered by Les Solutions Devforge inc (domain `devforge.ca`). The code is public at <https://github.com/Rixtayz/Mail-MCP>.
+Mail-MCP is published by Rixtayz. The code is public at <https://github.com/Rixtayz/Mail-MCP>.
+
+The Microsoft app that signs you in, named Mail-MCP, is registered through Les Solutions Devforge inc (domain `devforge.ca`), which is why Microsoft's consent screen shows that name as the verified publisher.
 
 ## Where it runs
 
