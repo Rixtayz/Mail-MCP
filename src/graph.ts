@@ -24,7 +24,7 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 export function describeGraphError(status: number, code: string | undefined, raw: string): string {
   switch (status) {
     case 401:
-      return `Unauthorized (401): the token is expired or invalid. Ask the user to run \`${LOGIN_COMMAND}\` again.`;
+      return "The sign-in has expired. Call the mail_login tool to sign the user in again.";
     case 403:
       return `Forbidden (403${code ? ", " + code : ""}): the app registration probably lacks the Mail.ReadWrite permission. Check the README, then run \`${LOGIN_COMMAND}\` again.`;
     case 404:

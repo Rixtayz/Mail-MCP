@@ -34,9 +34,11 @@ describe("GraphClient.request", () => {
     expect(calls.length).toBe(3);
   });
 
-  it("maps 401 to the npx login command, which works without a clone", async () => {
+  it("maps 401 to the mail_login tool", async () => {
     const { f } = mockFetch(() => json({ error: { code: "InvalidAuthenticationToken", message: "nope" } }, 401));
-    await expect(client(f).get("/me")).rejects.toThrow("npx -y @rixtay/mail-mcp login");
+    await expect(client(f).get("/me")).rejects.toThrow(
+      /^The sign-in has expired\. Call the mail_login tool to sign the user in again\.$/,
+    );
   });
 
   it("maps 404 to an actionable error", async () => {
