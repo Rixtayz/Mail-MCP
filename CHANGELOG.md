@@ -4,10 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
 ### Added
 
 - A Claude Desktop extension (`.mcpb`) for one-click install.
 - `mail_login` and `mail_logout` tools: the assistant signs the user in and out, so no terminal is needed. `mail-mcp logout` does the same from the command line.
+- `PRIVACY.md` and `TERMS.md`.
 
 ### Changed
 
@@ -16,10 +19,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - A 403 from Microsoft now tells the assistant to call `mail_login` instead of a terminal command.
 - Sign-in always shows Microsoft's account picker, so you choose which account Mail-MCP uses.
 - Releases are published from GitHub Actions with npm provenance, and each GitHub release carries the `.mcpb`.
+- The README is rewritten around the one-click install, with a security and privacy section.
 
-### Security
+### Removed
 
-- Upgraded `@azure/msal-node` to 7.2.2 (GHSA-xcx6-jx8p-x3h5), `@modelcontextprotocol/server` to 2.4.0 (GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq) and `zod` to 4.6.7 (GHSA-mrhx-c7xc-m3w5).
+- The `mailto:` unsubscribe no longer sends an email. `mail_unsubscribe` returns a `mailtoUrl` link for the user to open in their own mail app, because the recipient and text came from the sender's header. `Mail.Send` and `User.Read` are no longer requested.
 
 ### Fixed
 
@@ -27,9 +31,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - The page shown in the browser at the end of sign-in displayed raw HTML tags since 0.1.2. It is now plain text.
 - An unreadable token cache file is treated as missing, so the next sign-in replaces it. Its content can no longer appear in an error message.
 
-### Removed
+### Security
 
-- The `mailto:` unsubscribe no longer sends an email. `mail_unsubscribe` returns a `mailtoUrl` link for the user to open in their own mail app, because the recipient and text came from the sender's header. `Mail.Send` and `User.Read` are no longer requested.
+- Upgraded `@azure/msal-node` to 7.2.2 (GHSA-xcx6-jx8p-x3h5), `@modelcontextprotocol/server` to 2.4.0 (GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq) and `zod` to 4.6.7 (GHSA-mrhx-c7xc-m3w5).
 
 ## [0.1.2] - 2026-10-01
 
@@ -68,7 +72,8 @@ First public release.
 - Unsubscribe cascade: RFC 8058 one-click POST, then `mailto:`, then a URL for the assistant's browser.
 - Safe defaults: deletion moves to Deleted Items, `permanent: true` to purge, `dryRun` on bulk actions, MCP annotations on every tool.
 
-[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Rixtayz/Mail-MCP/releases/tag/v0.1.0
