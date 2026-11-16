@@ -100,7 +100,7 @@ During a sign-in it also listens on 127.0.0.1, on your own computer, where your 
 
 **Where the code comes from.** Releases are published from GitHub Actions, not from a personal machine, with [npm provenance](https://docs.npmjs.com/generating-provenance-statements). The package page on npmjs.com shows the commit and workflow run a version was built from, and `npm audit signatures` checks the signatures and provenance of installed packages. Each GitHub release also carries the `.mcpb` file. This applies to releases from 0.2.0 on.
 
-**"Unverified" on the consent screen.** Microsoft currently labels Mail-MCP as an unverified app. That means Microsoft has not confirmed who publishes it: the app is registered by Les Solutions Devforge inc (domain `devforge.ca`), but publisher verification, Microsoft's check of that claim, is not complete. If you would rather not rely on the shared app, use your own, below.
+**Verified publisher.** The consent screen names the publisher, Les Solutions Devforge inc, with Microsoft's verified badge. That means Microsoft has confirmed, through its partner program, which company registered the app. It does not mean Microsoft reviewed the code: the code is in this repository. If you would rather not rely on the shared app, use your own, below.
 
 ## Use your own Entra app (advanced)
 
