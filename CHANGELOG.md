@@ -16,7 +16,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `MAIL_MCP_CLIENT_ID` is now optional. Without it the server uses the built-in Mail-MCP app, so no Entra registration is needed.
 - When no account is signed in or the sign-in has expired, tools now tell the assistant to call `mail_login` instead of asking the user to run a terminal command.
-- A 403 from Microsoft now tells the assistant to call `mail_login` instead of a terminal command.
+- A 401 or 403 from Microsoft now passes on Microsoft's error code and message instead of guessing a cause, and tells the assistant to call `mail_logout`, then `mail_login`, if it keeps happening. It used to ask for a terminal command.
+- `mail_senders_summary` now shows, for each sender, the method `mail_unsubscribe` will use. A sender that offers both a link and a `mailto:` address shows `browser`, no longer `mailto`, since no email is needed.
 - Sign-in always shows Microsoft's account picker, so you choose which account Mail-MCP uses.
 - Releases are published from GitHub Actions with npm provenance, and each GitHub release carries the `.mcpb`.
 - The README is rewritten around the one-click install, with a security and privacy section.
@@ -27,7 +28,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- Signing out with `mail-mcp logout` while a server is running now signs that server out too, instead of letting it restore the old sign-in on its next write.
+- Deleting the token cache (or running `mail-mcp logout`) while a server is running now signs that server out too.
+- When the token cache also held an account signed in under another client ID, the tools could answer that the sign-in had expired while `mail_login` reported the user signed in. Both now use the same account.
 - The page shown in the browser at the end of sign-in displayed raw HTML tags since 0.1.2. It is now plain text.
 - An unreadable token cache file is treated as missing, so the next sign-in replaces it. Its content can no longer appear in an error message.
 

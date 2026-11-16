@@ -80,17 +80,19 @@ The short version: the software runs on your computer and talks to Microsoft. It
 
 **No server, no telemetry.** Mail-MCP has no analytics, no update check and no service operated by its author. The publisher never sees your mail or your tokens: the tokens stay on your machine.
 
-**Hosts it contacts.** Nothing else:
+**Hosts it contacts.** These, and no other remote host:
 
 - `login.microsoftonline.com`, to sign you in.
 - `graph.microsoft.com`, to read and organize your mail.
 - The unsubscribe address a sender published in its own email, only when you ask to unsubscribe and the sender supports RFC 8058 one-click. The server refuses to send that request to a private, loopback or link-local address.
 
-**What the Microsoft consent screen asks, and why.** The only Microsoft Graph permission requested is `Mail.ReadWrite`. At first sign-in Microsoft shows three lines:
+During a sign-in it also listens on 127.0.0.1, on your own computer, where your browser hands back Microsoft's answer.
 
-1. *Read and write your mail.* Needed to list, read, move and delete messages. Microsoft adds that this does not include permission to send email, and it does not: Mail-MCP does not request `Mail.Send`.
-2. *View your basic profile.* Part of signing in, so the app knows which account signed in. Mail-MCP does not call the profile endpoint.
-3. *Keep access to data you have given it access to.* Lets the sign-in refresh without asking you again every hour.
+**What the Microsoft consent screen asks, and why.** The only Microsoft Graph permission requested is `Mail.ReadWrite`. At first sign-in Microsoft shows three lines, summarized here:
+
+1. Reading and writing your mail. Needed to list, read, move and delete messages. Microsoft adds that this does not include permission to send email, and it does not: Mail-MCP does not request `Mail.Send`.
+2. Your basic profile. Part of signing in, so the app knows which account signed in. Mail-MCP does not call the profile endpoint.
+3. Keeping access to data you have given it access to. Lets the sign-in refresh without asking you again every hour.
 
 **Where the sign-in is stored.** In `~/.mail-mcp/token-cache.json` (or the path in `MAIL_MCP_CACHE_PATH`), written so that only your user can read and write it (mode 600). On Windows the operating system does not enforce that mode, so the file is protected only by the permissions of your user folder. Tokens are not kept in the system keychain. They never appear in a tool result.
 
@@ -123,7 +125,13 @@ PowerShell:
 $env:MAIL_MCP_CLIENT_ID = "<id>"
 ```
 
-For Claude Code, add `--env MAIL_MCP_CLIENT_ID=<id>` to the `claude mcp add` command. For the Claude Desktop extension, fill in "Your own Entra client ID" in its settings. For a JSON configuration, add `"env": { "MAIL_MCP_CLIENT_ID": "<id>" }` to the server entry. No client secret exists: the server is a public client using the authorization code flow with PKCE.
+For Claude Code, add the server with this command instead of the one above (`--env` takes several values, so keep another option between it and the server name):
+
+```bash
+claude mcp add --scope user --env MAIL_MCP_CLIENT_ID=<id> --transport stdio mail -- npx -y @rixtay/mail-mcp
+```
+
+For the Claude Desktop extension, fill in "Your own Entra client ID" in its settings. For a JSON configuration, add `"env": { "MAIL_MCP_CLIENT_ID": "<id>" }` to the server entry. No client secret exists: the server is a public client using the authorization code flow with PKCE.
 
 | Environment variable | Purpose |
 |---|---|
