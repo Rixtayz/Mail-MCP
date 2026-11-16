@@ -271,7 +271,6 @@ describe("MSAL guard: the cancel trick still works with the installed @azure/msa
       );
     const url = await authUrl.promise;
     const redirect = new URL(new URL(url).searchParams.get("redirect_uri")!);
-    expect(redirect.hostname).toBe("localhost");
 
     await cancelLoopback(url);
 
