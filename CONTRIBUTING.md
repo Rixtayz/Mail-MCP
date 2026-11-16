@@ -40,9 +40,22 @@ Security problems go through [SECURITY.md](SECURITY.md) rather than a public iss
 
 ## Releasing (maintainer)
 
-1. Bump the version in `package.json` and in both `version` fields of `server.json`, then run `npm install --package-lock-only`.
-2. Move the `Unreleased` entries in `CHANGELOG.md` under the new version.
-3. Commit, then `npm publish` (typecheck, tests and build run first).
-4. Tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin main vX.Y.Z`.
+Pushing a tag publishes to npm from GitHub Actions, with provenance, and creates the GitHub release with the Claude Desktop bundle attached.
+
+1. Bump the version in `package.json`, in both `version` fields of `server.json` and in `mcpb/manifest.json`, then run `npm install --package-lock-only`.
+2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## [X.Y.Z] - date` heading. The release notes are taken from that section.
+3. Commit, then tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin main vX.Y.Z`.
+4. The **Release** workflow checks the tag against `package.json`, publishes `@rixtay/mail-mcp` to npm (typecheck, tests and build run first) and creates the GitHub release with `mail-mcp-X.Y.Z.mcpb`.
 5. Run **Publish to MCP Registry** from the Actions tab. It checks that `server.json` matches the version now on npm, then publishes through GitHub OIDC.
-6. Create the GitHub release from the tag, with the changelog entry as notes.
+
+### One-time npm setup
+
+npm publishes without a stored token, through trusted publishing. On npmjs.com, open the package `@rixtay/mail-mcp`, then Settings, Trusted publishing, GitHub Actions, and enter:
+
+- User or organization: `Rixtayz`
+- Repository: `Mail-MCP`
+- Workflow filename: `release.yml`
+- Environment: leave empty
+- Allow: `npm publish`
+
+The setting lapses if no publish validates it within 2 days, so set it up shortly before tagging.

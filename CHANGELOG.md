@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - When no account is signed in or the sign-in has expired, tools now tell the assistant to call `mail_login` instead of asking the user to run a terminal command.
 - A 403 from Microsoft now tells the assistant to call `mail_login` instead of a terminal command.
 - Sign-in always shows Microsoft's account picker, so you choose which account Mail-MCP uses.
+- Releases are published from GitHub Actions with npm provenance, and each GitHub release carries the `.mcpb`.
 
 ### Security
 
