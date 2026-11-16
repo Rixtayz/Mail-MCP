@@ -2,7 +2,7 @@ import { PublicClientApplication, type AccountInfo, type ICachePlugin, type Toke
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { AUTHORITY, LOGIN_COMMAND, SCOPES } from "./constants.js";
+import { AUTHORITY, DEFAULT_CLIENT_ID, LOGIN_COMMAND, SCOPES } from "./constants.js";
 
 export class AuthError extends Error {}
 
@@ -10,13 +10,13 @@ export function cachePath(): string {
   return process.env.MAIL_MCP_CACHE_PATH ?? join(homedir(), ".mail-mcp", "token-cache.json");
 }
 
+/**
+ * The user's own Entra client ID when MAIL_MCP_CLIENT_ID is set; otherwise the built-in one.
+ * Unset, empty, whitespace-only, or an unsubstituted `${...}` placeholder (Claude Desktop passes that when the field is left blank) counts as unset.
+ */
 export function clientId(): string {
-  const id = process.env.MAIL_MCP_CLIENT_ID;
-  if (!id) {
-    throw new AuthError(
-      "MAIL_MCP_CLIENT_ID is not set. Put the Application (client) ID of your Entra app registration in the MAIL_MCP_CLIENT_ID environment variable (see README).",
-    );
-  }
+  const id = (process.env.MAIL_MCP_CLIENT_ID ?? "").trim();
+  if (id === "" || id.startsWith("${")) return DEFAULT_CLIENT_ID;
   return id;
 }
 

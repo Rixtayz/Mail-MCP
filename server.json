@@ -22,8 +22,8 @@
       "environmentVariables": [
         {
           "name": "MAIL_MCP_CLIENT_ID",
-          "description": "Application (client) ID of your Microsoft Entra app registration (see README). Run `npx -y @rixtay/mail-mcp login` once to sign in.",
-          "isRequired": true,
+          "description": "Optional. Application (client) ID of your own Microsoft Entra app registration. Leave unset to use the built-in Mail-MCP app.",
+          "isRequired": false,
           "isSecret": false,
           "format": "string"
         },

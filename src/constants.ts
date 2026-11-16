@@ -13,3 +13,5 @@ export const MAX_RETRIES = 5;
 export const PAGE_SIZE_SCAN = 1000;
 export const SCOPES = ["Mail.ReadWrite"];
 export const AUTHORITY = "https://login.microsoftonline.com/consumers";
+// Application (client) ID of the built-in Mail-MCP Entra app, used when MAIL_MCP_CLIENT_ID is unset.
+export const DEFAULT_CLIENT_ID = "599bb072-c4e2-42b1-b4e5-1d901fc08c66";
