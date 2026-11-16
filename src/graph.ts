@@ -55,38 +55,39 @@ export class GraphClient {
   private readonly getToken: () => Promise<string>;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly baseUrl: string;
+  private readonly base: URL;
+  private readonly basePath: string;
 
   constructor(opts: GraphClientOptions) {
     this.getToken = opts.getToken;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? defaultSleep;
-    this.baseUrl = opts.baseUrl ?? GRAPH_BASE;
+    this.base = new URL(opts.baseUrl ?? GRAPH_BASE);
+    this.basePath = this.base.pathname.replace(/\/+$/, "");
   }
 
   /**
    * Absolute URL for a Graph path, or a full nextLink URL. The only choke point before the bearer token is
-   * attached: an absolute URL is accepted only when it is under the base URL (parsed, not prefix-matched).
+   * attached. Both forms are resolved to a parsed URL first, so `..`, `%2e%2e` and the like are already
+   * collapsed, and only then checked to be under the base URL (parsed, not prefix-matched).
    */
   private url(pathOrUrl: string): string {
-    if (!/^https?:\/\//i.test(pathOrUrl)) {
-      return `${this.baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
-    }
+    const raw = /^https?:\/\//i.test(pathOrUrl)
+      ? pathOrUrl
+      : `${this.base.origin}${this.basePath}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
     let target: URL;
     try {
-      target = new URL(pathOrUrl);
+      target = new URL(raw);
     } catch {
       throw new GraphError(OUTSIDE_GRAPH, 0);
     }
-    const base = new URL(this.baseUrl);
-    const basePath = base.pathname.replace(/\/+$/, "");
     const inside =
-      target.protocol === base.protocol &&
-      target.hostname === base.hostname &&
-      target.port === base.port &&
+      target.protocol === this.base.protocol &&
+      target.hostname === this.base.hostname &&
+      target.port === this.base.port &&
       target.username === "" &&
       target.password === "" &&
-      (target.pathname === basePath || target.pathname.startsWith(`${basePath}/`));
+      (target.pathname === this.basePath || target.pathname.startsWith(`${this.basePath}/`));
     if (!inside) throw new GraphError(OUTSIDE_GRAPH, 0);
     return target.href;
   }
@@ -111,6 +112,7 @@ export class GraphClient {
           ...extraHeaders,
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: "error", // a redirect would carry the bearer token to wherever it points
       });
 
       if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < MAX_RETRIES) {

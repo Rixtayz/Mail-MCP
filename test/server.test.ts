@@ -96,7 +96,6 @@ describe("mail_search cursor", () => {
     expect(res.result?.content[0].text).toBe(
       "Refused to call a URL outside Microsoft Graph. Pass back the cursor exactly as mail_search returned it.",
     );
-    expect(urls.filter((u) => !u.startsWith("https://graph.microsoft.com/v1.0/"))).toEqual([]);
     expect(urls).toEqual([]);
     await close();
   });
