@@ -5,6 +5,7 @@ import { VERSION } from "../src/constants.js";
 import type { MailService } from "../src/mail.js";
 import { buildServer } from "../src/server.js";
 import type { SessionService } from "../src/tools/session.js";
+import type { UnsubscribeInfo } from "../src/types.js";
 
 describe("VERSION", () => {
   it("matches package.json, so serverInfo and --version never drift from the release", () => {
@@ -13,40 +14,73 @@ describe("VERSION", () => {
   });
 });
 
-describe("session tools over the wire", () => {
-  async function connect(session: SessionService) {
-    const mail = {} as MailService; // the mail tools are only listed here, never called
-    const server = buildServer(mail, session);
-    const [client, serverEnd] = InMemoryTransport.createLinkedPair();
-    const pending = new Map<number, (m: JSONRPCMessage) => void>();
-    client.onmessage = (m) => {
-      if ("id" in m && typeof m.id === "number") pending.get(m.id)?.(m);
-    };
-    await server.connect(serverEnd);
-    await client.start();
-    let next = 1;
-    const request = (method: string, params: Record<string, unknown> = {}) =>
-      new Promise<{ result?: Record<string, any>; error?: unknown }>((resolve) => {
-        const id = next++;
-        pending.set(id, (m) => resolve(m as never));
-        void client.send({ jsonrpc: "2.0", id, method, params });
-      });
-    const init = await request("initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "test", version: "0" },
+/** A server on an in-memory transport. `mail` defaults to a stub whose tools are only listed, never called. */
+async function connect(session: SessionService, mail = {} as MailService) {
+  const server = buildServer(mail, session);
+  const [client, serverEnd] = InMemoryTransport.createLinkedPair();
+  const pending = new Map<number, (m: JSONRPCMessage) => void>();
+  client.onmessage = (m) => {
+    if ("id" in m && typeof m.id === "number") pending.get(m.id)?.(m);
+  };
+  await server.connect(serverEnd);
+  await client.start();
+  let next = 1;
+  const request = (method: string, params: Record<string, unknown> = {}) =>
+    new Promise<{ result?: Record<string, any>; error?: unknown }>((resolve) => {
+      const id = next++;
+      pending.set(id, (m) => resolve(m as never));
+      void client.send({ jsonrpc: "2.0", id, method, params });
     });
-    expect(init.error).toBeUndefined();
-    await client.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-    return { request, close: () => server.close() };
-  }
-
-  const fakeSession = (over: Partial<SessionService> = {}): SessionService => ({
-    login: async () => ({ status: "signed_in", account: "a@outlook.com" }),
-    logout: async () => ({}),
-    ...over,
+  const init = await request("initialize", {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "test", version: "0" },
   });
+  expect(init.error).toBeUndefined();
+  await client.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+  return { request, close: () => server.close() };
+}
 
+const fakeSession = (over: Partial<SessionService> = {}): SessionService => ({
+  login: async () => ({ status: "signed_in", account: "a@outlook.com" }),
+  logout: async () => ({}),
+  ...over,
+});
+
+describe("mail_senders_summary over the wire", () => {
+  it("labels each sender with the method mail_unsubscribe would use", async () => {
+    const sender = (address: string, unsubscribe: UnsubscribeInfo) => ({
+      address, name: "", domain: "x.example", count: 1, unreadCount: 0,
+      lastReceived: "2026-01-01T00:00:00Z", lastSubject: "s", lastMessageId: `id-${address}`, unsubscribe,
+    });
+    const senders = [
+      sender("oneclick@x.example", { oneClick: true, https: "https://x.example/1", mailto: "u@x.example" }),
+      // A link and a mailto without one-click: mail_unsubscribe hands over the link, so no email is needed.
+      sender("both@x.example", { oneClick: false, https: "https://x.example/2", mailto: "u@x.example" }),
+      sender("mailto@x.example", { oneClick: false, mailto: "u@x.example" }),
+      sender("none@x.example", { oneClick: false }),
+    ];
+    const mail = { sendersSummary: async () => ({ scanned: 4, totalSenders: 4, senders }) } as unknown as MailService;
+    const { request, close } = await connect(fakeSession(), mail);
+    const res = await request("tools/call", { name: "mail_senders_summary", arguments: {} });
+    const labels = (res.result?.content[0].text as string)
+      .split("\n")
+      .slice(1)
+      .map((line) => /<([^>]+)>.*\| unsubscribe: ([a-z-]+) \|/.exec(line)?.slice(1, 3));
+    expect(labels).toEqual([
+      ["oneclick@x.example", "one-click"],
+      ["both@x.example", "browser"],
+      ["mailto@x.example", "mailto"],
+      ["none@x.example", "none"],
+    ]);
+    const list = await request("tools/list");
+    const description = (list.result?.tools as { name: string; description: string }[]).find((t) => t.name === "mail_senders_summary")?.description;
+    expect(description).toMatch(/one-click, browser .*mailto .*or none/);
+    await close();
+  });
+});
+
+describe("session tools over the wire", () => {
   it("lists the nine mail tools plus mail_login and mail_logout", async () => {
     const { request, close } = await connect(fakeSession());
     const list = await request("tools/list");
