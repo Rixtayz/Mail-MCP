@@ -34,18 +34,36 @@ describe("GraphClient.request", () => {
     expect(calls.length).toBe(3);
   });
 
-  it("maps 401 to the mail_login tool", async () => {
-    const { f } = mockFetch(() => json({ error: { code: "InvalidAuthenticationToken", message: "nope" } }, 401));
-    await expect(client(f).get("/me")).rejects.toThrow(
-      /^The sign-in has expired\. Call the mail_login tool to sign the user in again\.$/,
+  // mail_login answers "Signed in" whenever a silent token works, so a retry can hit the same error:
+  // both texts must offer a way out of that loop, and carry what Microsoft said.
+  it("maps 401 to mail_login, with Microsoft's code and message, and a way out of a login loop", async () => {
+    const { f } = mockFetch(() => json({ error: { code: "InvalidAuthenticationToken", message: "Access token has expired or is not yet valid." } }, 401));
+    const err = await client(f).get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(
+      "Microsoft rejected the sign-in (401, InvalidAuthenticationToken): Access token has expired or is not yet valid. " +
+        "Call the mail_login tool to sign the user in again. If this keeps happening, call mail_logout, then mail_login.",
     );
   });
 
-  it("maps 403 to the mail_login tool, not a terminal command", async () => {
-    const { f } = mockFetch(() => json({ error: { code: "ErrorAccessDenied", message: "nope" } }, 403));
-    await expect(client(f).get("/me")).rejects.toThrow(
-      /^Forbidden \(403, ErrorAccessDenied\): the sign-in lacks the Mail\.ReadWrite permission\. Call the mail_login tool to sign the user in again\.$/,
+  it("maps 403 to Microsoft's code and message, without guessing a cause, and a way out of a login loop", async () => {
+    const { f } = mockFetch(() => json({ error: { code: "ErrorAccessDenied", message: "Access is denied. Check credentials and try again." } }, 403));
+    const err = await client(f).get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(
+      "Microsoft refused the request (403, ErrorAccessDenied): Access is denied. Check credentials and try again. " +
+        "If this keeps happening, call mail_logout, then mail_login.",
     );
+    expect(err?.message).not.toMatch(/Mail\.ReadWrite|permission/);
+  });
+
+  it("401 and 403 texts read well without a code, or with a message that has no final period", async () => {
+    const { f } = mockFetch((_c, n) => (n === 1 ? new Response("", { status: 401 }) : json({ error: { message: "nope" } }, 403)));
+    const g = client(f);
+    const first = await g.get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(first?.message).toBe(
+      "Microsoft rejected the sign-in (401). Call the mail_login tool to sign the user in again. If this keeps happening, call mail_logout, then mail_login.",
+    );
+    const second = await g.get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(second?.message).toBe("Microsoft refused the request (403): nope. If this keeps happening, call mail_logout, then mail_login.");
   });
 
   it("maps 404 to an actionable error", async () => {

@@ -20,13 +20,25 @@ export interface GraphClientOptions {
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// mail_login answers "Signed in" as long as a token can be had silently, so after a 401 or 403 a new
+// mail_login can leave the same token in place and the retry fail again. Signing out first breaks that loop.
+const IF_IT_PERSISTS = "If this keeps happening, call mail_logout, then mail_login.";
+
+/** "(401, Code): Microsoft's message." or "(401)." when Microsoft gave no message. */
+function said(status: number, code: string | undefined, raw: string): string {
+  const message = raw.slice(0, 300).trim();
+  const head = `(${status}${code ? ", " + code : ""})`;
+  if (!message) return `${head}.`;
+  return `${head}: ${message}${/[.!?]$/.test(message) ? "" : "."}`;
+}
+
 /** Map Graph HTTP errors to actionable messages for the model. */
 export function describeGraphError(status: number, code: string | undefined, raw: string): string {
   switch (status) {
     case 401:
-      return "The sign-in has expired. Call the mail_login tool to sign the user in again.";
+      return `Microsoft rejected the sign-in ${said(status, code, raw)} Call the mail_login tool to sign the user in again. ${IF_IT_PERSISTS}`;
     case 403:
-      return `Forbidden (403${code ? ", " + code : ""}): the sign-in lacks the Mail.ReadWrite permission. Call the mail_login tool to sign the user in again.`;
+      return `Microsoft refused the request ${said(status, code, raw)} ${IF_IT_PERSISTS}`;
     case 404:
       return "Not found (404): the message or folder no longer exists (moved or deleted; ids change when a message changes folder). Call mail_search or mail_list_folders again to get fresh ids.";
     case 429:
