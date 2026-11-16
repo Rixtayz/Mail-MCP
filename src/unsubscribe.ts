@@ -61,6 +61,23 @@ export function parseListUnsubscribe(headers: GraphHeader[] | undefined): Unsubs
   return info;
 }
 
+const MAILTO_SUBJECT_MAX = 200;
+const MAILTO_BODY_MAX = 1000;
+
+/**
+ * A `mailto:` link the user can open in their own mail app, built from the header's
+ * address, subject and body only. Any other field the sender put in the header (cc, bcc, to)
+ * is dropped, and everything is percent-encoded so nothing can add a query parameter.
+ */
+export function buildMailtoUrl(info: UnsubscribeInfo): string | undefined {
+  if (!info.mailto) return undefined;
+  const address = encodeURIComponent(info.mailto).replace(/%40/g, "@");
+  const subject = (info.mailtoSubject ?? "unsubscribe").slice(0, MAILTO_SUBJECT_MAX);
+  const query = [`subject=${encodeURIComponent(subject)}`];
+  if (info.mailtoBody) query.push(`body=${encodeURIComponent(info.mailtoBody.slice(0, MAILTO_BODY_MAX))}`);
+  return `mailto:${address}?${query.join("&")}`;
+}
+
 export interface OneClickResult {
   ok: boolean;
   status?: number;

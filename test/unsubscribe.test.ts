@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { oneClickPost, parseListUnsubscribe, splitListUnsubscribe } from "../src/unsubscribe.js";
+import { buildMailtoUrl, oneClickPost, parseListUnsubscribe, splitListUnsubscribe } from "../src/unsubscribe.js";
 
 const h = (name: string, value: string) => ({ name, value });
 
@@ -190,5 +190,32 @@ describe("oneClickPost destination guard", () => {
     const r = await oneClickPost(url, f, publicDns);
     expect(urls).toEqual([url]);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("buildMailtoUrl", () => {
+  it("returns undefined without a mailto target", () => {
+    expect(buildMailtoUrl({ oneClick: false })).toBeUndefined();
+  });
+  it("defaults the subject to 'unsubscribe' and omits an absent body", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "stop@x.example" })).toBe("mailto:stop@x.example?subject=unsubscribe");
+  });
+  it("percent-encodes subject and body", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "Unsub me & go", mailtoBody: "a b\nc" }))
+      .toBe("mailto:stop@x.example?subject=Unsub%20me%20%26%20go&body=a%20b%0Ac");
+  });
+  it("carries only address, subject and body from a hostile header", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:stop@x.example?cc=victim@y.example&bcc=v2@y.example&to=v3@y.example&subject=s>" }]);
+    const url = buildMailtoUrl(info)!;
+    expect(url).toBe("mailto:stop@x.example?subject=s");
+  });
+  it("encodes an address that tries to smuggle a query", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "a@x.example?cc=v@y.example" })).not.toContain("?cc=");
+  });
+  it("caps subject at 200 characters and body at 1000", () => {
+    const url = buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "s".repeat(500), mailtoBody: "b".repeat(5000) })!;
+    const q = new URLSearchParams(url.split("?")[1]);
+    expect(q.get("subject")).toHaveLength(200);
+    expect(q.get("body")).toHaveLength(1000);
   });
 });

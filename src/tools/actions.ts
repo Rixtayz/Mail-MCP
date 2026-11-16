@@ -109,8 +109,10 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     {
       title: "Unsubscribe",
       description:
-        "Try to unsubscribe from the mailing list of a message, in order: (1) RFC 8058 one-click HTTPS POST, (2) automatic email to the List-Unsubscribe mailto address, " +
-        "(3) otherwise returns `method: \"browser\"` with the URL to open in a browser to finish manually, (4) `method: \"none\"` when no header exists. " +
+        "Try to unsubscribe from the mailing list of a message, in order: (1) RFC 8058 one-click HTTPS POST (`method: \"one-click\"`, done); " +
+        "(2) otherwise `method: \"browser\"` with the URL to open in a browser, plus `mailtoUrl` when the sender also lists an email address; " +
+        "(3) `method: \"mailto\"` when the sender only accepts email: `mailtoUrl` is a link that opens a pre-filled message in the user's own mail app, and the user presses Send; " +
+        "(4) `method: \"none\"` when no header exists. This tool never sends email. " +
         "Deletes nothing. Preferably pass the `lastMessageId` returned by mail_senders_summary.",
       inputSchema: z.object({ id: z.string().min(1).describe("Id of a representative message of the newsletter") }).strict(),
       outputSchema: z.object({
@@ -118,6 +120,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
         ok: z.boolean(),
         url: z.string().optional(),
         mailto: z.string().optional(),
+        mailtoUrl: z.string().optional(),
         detail: z.string(),
         from: z.string(),
         subject: z.string(),
@@ -127,7 +130,13 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     async ({ id }) =>
       run(async () => {
         const r = await mail.unsubscribe(id);
-        const head = r.ok ? `✅ Unsubscribed from ${r.from} (${r.method}).` : r.method === "browser" ? `🌐 Browser action required for ${r.from}: ${r.url}` : `⚠️ ${r.from}: ${r.method}`;
+        const head = r.ok
+          ? `✅ Unsubscribed from ${r.from} (${r.method}).`
+          : r.method === "browser"
+            ? `🌐 Browser action required for ${r.from}: ${r.url}`
+            : r.method === "mailto"
+              ? `✉️ Email needed for ${r.from}: ${r.mailtoUrl}`
+              : `⚠️ ${r.from}: ${r.method}`;
         return ok(`${head}\n${r.detail}`, { ...r });
       }),
   );
