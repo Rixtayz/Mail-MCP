@@ -1,5 +1,6 @@
 import { TokenCacheContext } from "@azure/msal-node";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,12 @@ import {
   resetClient,
   signedInAccount,
 } from "../src/auth.js";
+
+// The real mkdir, wrapped so that one test can hold a cache write at that point. Every other call passes through.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdir: vi.fn(actual.mkdir) };
+});
 
 const ENV_KEYS = ["MAIL_MCP_CLIENT_ID", "MAIL_MCP_CACHE_PATH"] as const;
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -47,42 +54,57 @@ const ENV = "login.windows.net";
 const BUILT_IN = "599bb072-c4e2-42b1-b4e5-1d901fc08c66";
 const OTHER_CLIENT = "11111111-2222-3333-4444-555555555555";
 
-function cacheFor(client: string): string {
+type SerializedCache = Record<"Account" | "IdToken" | "AccessToken" | "RefreshToken" | "AppMetadata", Record<string, object>>;
+
+function cacheObject(client: string, uid = UID, username = "a@outlook.com"): SerializedCache {
+  const home = `${uid}.${MSA_TENANT}`;
   const now = Math.floor(Date.now() / 1000);
   const target = "mail.readwrite openid profile";
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const idToken = `${b64({ alg: "none", typ: "JWT" })}.${b64({
     ver: "2.0", iss: `https://login.microsoftonline.com/${MSA_TENANT}/v2.0`, aud: client, tid: MSA_TENANT,
-    oid: UID, sub: "placeholder-subject", preferred_username: "a@outlook.com", name: "A", iat: now, exp: now + 3600,
+    oid: uid, sub: "placeholder-subject", preferred_username: username, name: "A", iat: now, exp: now + 3600,
   })}.`;
-  return JSON.stringify({
+  return {
     Account: {
-      [`${HOME}-${ENV}-${MSA_TENANT}`]: {
-        home_account_id: HOME, environment: ENV, realm: MSA_TENANT, local_account_id: UID,
-        username: "a@outlook.com", authority_type: "MSSTS", name: "A",
+      [`${home}-${ENV}-${MSA_TENANT}`]: {
+        home_account_id: home, environment: ENV, realm: MSA_TENANT, local_account_id: uid,
+        username, authority_type: "MSSTS", name: "A",
       },
     },
     IdToken: {
-      [`${HOME}-${ENV}-idtoken-${client}-${MSA_TENANT}--`]: {
-        home_account_id: HOME, environment: ENV, credential_type: "IdToken", client_id: client,
+      [`${home}-${ENV}-idtoken-${client}-${MSA_TENANT}--`]: {
+        home_account_id: home, environment: ENV, credential_type: "IdToken", client_id: client,
         secret: idToken, realm: MSA_TENANT,
       },
     },
     AccessToken: {
-      [`${HOME}-${ENV}-accesstoken-${client}-${MSA_TENANT}-${target}-`]: {
-        home_account_id: HOME, environment: ENV, credential_type: "AccessToken", client_id: client,
+      [`${home}-${ENV}-accesstoken-${client}-${MSA_TENANT}-${target}-`]: {
+        home_account_id: home, environment: ENV, credential_type: "AccessToken", client_id: client,
         secret: "placeholder-access-token", realm: MSA_TENANT, target, token_type: "Bearer",
         cached_at: String(now), expires_on: String(now + 3600), extended_expires_on: String(now + 7200),
       },
     },
     RefreshToken: {
-      [`${HOME}-${ENV}-refreshtoken-${client}---`]: {
-        home_account_id: HOME, environment: ENV, credential_type: "RefreshToken", client_id: client,
+      [`${home}-${ENV}-refreshtoken-${client}---`]: {
+        home_account_id: home, environment: ENV, credential_type: "RefreshToken", client_id: client,
         secret: "placeholder-refresh-token",
       },
     },
     AppMetadata: {},
-  });
+  };
+}
+
+function cacheFor(client: string): string {
+  return JSON.stringify(cacheObject(client));
+}
+
+/** Two accounts, in this order: one signed in under another client ID (MSAL lists it with username ""), then one signed in under this one. */
+function staleThenSignedIn(): string {
+  const stale = cacheObject(OTHER_CLIENT, "00000000-0000-0000-3333-444444444444", "b@outlook.com");
+  const current = cacheObject(BUILT_IN);
+  const keys = Object.keys(current) as (keyof SerializedCache)[];
+  return JSON.stringify(Object.fromEntries(keys.map((k) => [k, { ...stale[k], ...current[k] }])));
 }
 
 describe("with a token cache file", () => {
@@ -127,6 +149,16 @@ describe("with a token cache file", () => {
     it("a corrupt cache file: undefined, never a throw", async () => {
       writeFileSync(path, '{"AccessToken":{"k":{"secret":placeholder-secret');
       expect(await signedInAccount()).toBeUndefined();
+    });
+  });
+
+  describe("an account from another client ID listed before the signed-in one", () => {
+    it("the tools use the same account mail_login reports", async () => {
+      writeFileSync(path, staleThenSignedIn());
+      const listed = await getClient().getTokenCache().getAllAccounts();
+      expect(listed.map((a) => a.username)).toEqual(["", "a@outlook.com"]); // the order this test is about
+      expect(await signedInAccount()).toBe("a@outlook.com");
+      expect(await getAccessToken()).toBe("placeholder-access-token");
     });
   });
 
@@ -211,6 +243,37 @@ describe("with a token cache file", () => {
       resetClient();
       expect(await signedInAccount()).toBe("a@outlook.com");
     });
+
+    it("a read during a first sign-in's write finds no file yet, and the new tokens are still saved", async () => {
+      // mail_login polls (or another tool runs) while the sign-in that just returned is writing the file.
+      const plugin = new FileCachePlugin(path);
+      const tokenCache = getClient().getTokenCache();
+      const write = new TokenCacheContext(tokenCache, true);
+      await plugin.beforeCacheAccess(write); // no file: nobody has signed in yet
+      tokenCache.deserialize(cacheFor(BUILT_IN)); // the tokens the sign-in returned, in memory
+
+      // Hold the write at its mkdir, before it serializes the cache, and run the read there.
+      const { mkdir: realMkdir } = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let reached!: () => void;
+      const writing = new Promise<void>((resolve) => { reached = resolve; });
+      vi.mocked(mkdir).mockImplementationOnce((async (...args: Parameters<typeof realMkdir>) => {
+        reached();
+        await held;
+        return realMkdir(...args);
+      }) as typeof mkdir);
+      const after = plugin.afterCacheAccess(write);
+      await writing;
+      await plugin.beforeCacheAccess(new TokenCacheContext(tokenCache, false));
+      expect(existsSync(path)).toBe(false); // the read really did find no file
+      release();
+      await after;
+
+      expect(readFileSync(path, "utf8")).toContain("a@outlook.com");
+      resetClient();
+      expect(await signedInAccount()).toBe("a@outlook.com");
+    });
   });
 
   describe("logout", () => {
@@ -228,8 +291,7 @@ describe("with a token cache file", () => {
 
     it("a cache from another client ID is deleted, and never reported as an empty account name", async () => {
       writeFileSync(path, cacheFor(OTHER_CLIENT));
-      const result = await logout();
-      expect(result.account).not.toBe("");
+      expect(await logout()).toEqual({});
       expect(existsSync(path)).toBe(false);
     });
 

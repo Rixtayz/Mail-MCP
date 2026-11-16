@@ -25,6 +25,9 @@ export function clientId(): string {
 
 /** Persists the MSAL token cache to a 0600 JSON file. */
 export class FileCachePlugin implements ICachePlugin {
+  /** True once this instance has read or written the file, until it finds the file gone. */
+  private seenFile = false;
+
   constructor(private readonly path: string) {}
 
   async beforeCacheAccess(ctx: TokenCacheContext): Promise<void> {
@@ -33,9 +36,13 @@ export class FileCachePlugin implements ICachePlugin {
       data = await readFile(this.path, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      // No file: another process signed out, or nobody has signed in yet. Either way MSAL must not keep what it
-      // holds in memory, or the next write would bring a signed-out account back. deserialize() only merges into
-      // the in-memory store, so empty the store itself, then drop the snapshot the next write merges with.
+      // Never seen a file: nobody has signed in yet, and a first sign-in may be saving its tokens right now,
+      // between its own read and its write. Keep what MSAL holds, or that write would save an empty cache.
+      if (!this.seenFile) return;
+      // The file this instance knew is gone: another process signed out. MSAL must not keep what it holds in
+      // memory, or the next write would bring the signed-out account back. deserialize() only merges into the
+      // in-memory store, so empty the store itself, then drop the snapshot the next write merges with.
+      this.seenFile = false;
       const store = (ctx.tokenCache as unknown as { getKVStore?: () => Record<string, unknown> }).getKVStore?.();
       if (store) for (const key of Object.keys(store)) delete store[key];
       ctx.tokenCache.deserialize("");
@@ -43,11 +50,12 @@ export class FileCachePlugin implements ICachePlugin {
     }
     try {
       ctx.tokenCache.deserialize(data);
+      this.seenFile = true;
     } catch {
       // Unparseable. Never rethrow: JSON.parse quotes the text around the fault, which could be part of a token.
       // MSAL kept the bad text as its snapshot before parsing it, and serialize() would parse it again on the
-      // next write; "" empties that snapshot (and leaves the in-memory cache as it is, as for a missing file),
-      // so the next write replaces the file with valid JSON.
+      // next write; "" empties that snapshot and leaves the in-memory cache as it is, so the next write
+      // replaces the file with valid JSON.
       ctx.tokenCache.deserialize("");
     }
   }
@@ -56,6 +64,7 @@ export class FileCachePlugin implements ICachePlugin {
     if (!ctx.cacheHasChanged) return;
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     await writeFile(this.path, ctx.tokenCache.serialize(), { mode: 0o600 });
+    this.seenFile = true;
     await chmod(this.path, 0o600);
   }
 }
@@ -79,7 +88,9 @@ export function resetClient(): void {
 
 export async function getAccount(): Promise<AccountInfo | undefined> {
   const accounts = await getClient().getTokenCache().getAllAccounts();
-  return accounts[0];
+  // MSAL reads the name from an ID token of this client ID; an account left by another client ID has "" and no
+  // token this client can use. Prefer the one this client signed in, as mail_login and logout() do.
+  return accounts.find((a) => a.username !== "") ?? accounts[0];
 }
 
 /** Silent token acquisition. Throws AuthError with an actionable message when login is required. */
