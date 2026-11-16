@@ -1,8 +1,18 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { TokenCacheContext } from "@azure/msal-node";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clientId, getAccessToken, getClient, loginInteractive, logout, resetClient, signedInAccount } from "../src/auth.js";
+import {
+  FileCachePlugin,
+  clientId,
+  getAccessToken,
+  getClient,
+  loginInteractive,
+  logout,
+  resetClient,
+  signedInAccount,
+} from "../src/auth.js";
 
 const ENV_KEYS = ["MAIL_MCP_CLIENT_ID", "MAIL_MCP_CACHE_PATH"] as const;
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -137,6 +147,36 @@ describe("with a token cache file", () => {
       const err = await getAccessToken().then(() => undefined, (e: unknown) => e as Error);
       expect(err?.message).not.toContain("tok123");
       expect(err?.message).toBe("Not signed in. Call the mail_login tool to sign the user in.");
+    });
+  });
+
+  describe("FileCachePlugin", () => {
+    it("a write after a corrupt read replaces the file with valid JSON and never echoes the corrupt text", async () => {
+      // The sequence of a sign-in whose cache file was corrupted (say, half-written by another process):
+      // a read of the bad file, then the write that saves the new tokens.
+      const plugin = new FileCachePlugin(path);
+      const tokenCache = getClient().getTokenCache();
+      writeFileSync(path, cacheFor(BUILT_IN));
+      await plugin.beforeCacheAccess(new TokenCacheContext(tokenCache, false)); // what this process already holds
+      writeFileSync(path, '{"secret":tok123');
+
+      const access = new TokenCacheContext(tokenCache, true);
+      let thrown: unknown;
+      try {
+        await plugin.beforeCacheAccess(access);
+        await plugin.afterCacheAccess(access);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(String(thrown instanceof Error ? thrown.message : thrown)).not.toContain("tok123");
+      expect(thrown).toBeUndefined();
+
+      const written = readFileSync(path, "utf8");
+      expect(written).not.toContain("tok123");
+      expect(() => JSON.parse(written)).not.toThrow();
+      // The file is usable again: a fresh client finds the account this process held.
+      resetClient();
+      expect(await signedInAccount()).toBe("a@outlook.com");
     });
   });
 

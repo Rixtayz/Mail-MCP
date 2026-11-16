@@ -38,8 +38,11 @@ export class FileCachePlugin implements ICachePlugin {
     try {
       ctx.tokenCache.deserialize(data);
     } catch {
-      // Unparseable: treat it like a missing file, so the next sign-in overwrites it. Never rethrow:
-      // JSON.parse quotes the text around the fault, which could be part of a token.
+      // Unparseable. Never rethrow: JSON.parse quotes the text around the fault, which could be part of a token.
+      // MSAL kept the bad text as its snapshot before parsing it, and serialize() would parse it again on the
+      // next write; "" empties that snapshot (and leaves the in-memory cache as it is, as for a missing file),
+      // so the next write replaces the file with valid JSON.
+      ctx.tokenCache.deserialize("");
     }
   }
 
