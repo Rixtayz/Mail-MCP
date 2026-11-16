@@ -41,6 +41,13 @@ describe("GraphClient.request", () => {
     );
   });
 
+  it("maps 403 to the mail_login tool, not a terminal command", async () => {
+    const { f } = mockFetch(() => json({ error: { code: "ErrorAccessDenied", message: "nope" } }, 403));
+    await expect(client(f).get("/me")).rejects.toThrow(
+      /^Forbidden \(403, ErrorAccessDenied\): the sign-in lacks the Mail\.ReadWrite permission\. Call the mail_login tool to sign the user in again\.$/,
+    );
+  });
+
   it("maps 404 to an actionable error", async () => {
     const { f } = mockFetch(() => json({ error: { code: "ErrorItemNotFound", message: "nope" } }, 404));
     await expect(client(f).get("/me/messages/x")).rejects.toThrow(/Not found \(404\)/);

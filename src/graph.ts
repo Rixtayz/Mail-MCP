@@ -1,4 +1,4 @@
-import { BATCH_SIZE, GRAPH_BASE, LOGIN_COMMAND, MAX_RETRIES } from "./constants.js";
+import { BATCH_SIZE, GRAPH_BASE, MAX_RETRIES } from "./constants.js";
 import type { BatchRequest, BatchResponse, GraphPage } from "./types.js";
 
 export class GraphError extends Error {
@@ -26,7 +26,7 @@ export function describeGraphError(status: number, code: string | undefined, raw
     case 401:
       return "The sign-in has expired. Call the mail_login tool to sign the user in again.";
     case 403:
-      return `Forbidden (403${code ? ", " + code : ""}): the app registration probably lacks the Mail.ReadWrite permission. Check the README, then run \`${LOGIN_COMMAND}\` again.`;
+      return `Forbidden (403${code ? ", " + code : ""}): the sign-in lacks the Mail.ReadWrite permission. Call the mail_login tool to sign the user in again.`;
     case 404:
       return "Not found (404): the message or folder no longer exists (moved or deleted; ids change when a message changes folder). Call mail_search or mail_list_folders again to get fresh ids.";
     case 429:

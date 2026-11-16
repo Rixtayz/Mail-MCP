@@ -33,6 +33,12 @@ export class FileCachePlugin implements ICachePlugin {
       data = await readFile(this.path, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      // No file: another process signed out, or nobody has signed in yet. Either way MSAL must not keep what it
+      // holds in memory, or the next write would bring a signed-out account back. deserialize() only merges into
+      // the in-memory store, so empty the store itself, then drop the snapshot the next write merges with.
+      const store = (ctx.tokenCache as unknown as { getKVStore?: () => Record<string, unknown> }).getKVStore?.();
+      if (store) for (const key of Object.keys(store)) delete store[key];
+      ctx.tokenCache.deserialize("");
       return;
     }
     try {

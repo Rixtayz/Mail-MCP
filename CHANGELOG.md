@@ -4,14 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- `mail_login` and `mail_logout` tools: the assistant signs the user in and out, so no terminal is needed. `mail-mcp logout` does the same from the command line.
+
 ### Changed
 
 - `MAIL_MCP_CLIENT_ID` is now optional. Without it the server uses the built-in Mail-MCP app, so no Entra registration is needed.
 - When no account is signed in or the sign-in has expired, tools now tell the assistant to call `mail_login` instead of asking the user to run a terminal command.
+- A 403 from Microsoft now tells the assistant to call `mail_login` instead of a terminal command.
 - Sign-in always shows Microsoft's account picker, so you choose which account Mail-MCP uses.
 
 ### Fixed
 
+- Signing out with `mail-mcp logout` while a server is running now signs that server out too, instead of letting it restore the old sign-in on its next write.
 - The page shown in the browser at the end of sign-in displayed raw HTML tags since 0.1.2. It is now plain text.
 - An unreadable token cache file is treated as missing, so the next sign-in replaces it. Its content can no longer appear in an error message.
 

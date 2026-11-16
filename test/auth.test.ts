@@ -180,6 +180,39 @@ describe("with a token cache file", () => {
     });
   });
 
+  describe("FileCachePlugin and a cache file that disappears", () => {
+    it("a deleted file empties this process's cache, and the next write does not bring the old account back", async () => {
+      // `mail-mcp logout` in another process deletes the file while this server is running.
+      const plugin = new FileCachePlugin(path);
+      const tokenCache = getClient().getTokenCache();
+      writeFileSync(path, cacheFor(BUILT_IN));
+      await plugin.beforeCacheAccess(new TokenCacheContext(tokenCache, false));
+      expect(Object.keys(tokenCache.getKVStore()).length).toBeGreaterThan(0);
+
+      rmSync(path);
+      const access = new TokenCacheContext(tokenCache, true);
+      await plugin.beforeCacheAccess(access);
+      expect(Object.keys(tokenCache.getKVStore())).toEqual([]);
+      await plugin.afterCacheAccess(access);
+
+      expect(readFileSync(path, "utf8")).not.toContain("a@outlook.com");
+      resetClient();
+      expect(await signedInAccount()).toBeUndefined();
+    });
+
+    it("no file yet (first sign-in): tokens added after the read are still saved", async () => {
+      const plugin = new FileCachePlugin(path);
+      const tokenCache = getClient().getTokenCache();
+      const access = new TokenCacheContext(tokenCache, true);
+      await plugin.beforeCacheAccess(access); // missing file
+      tokenCache.deserialize(cacheFor(BUILT_IN)); // what MSAL does when the sign-in returns tokens
+      await plugin.afterCacheAccess(access);
+
+      resetClient();
+      expect(await signedInAccount()).toBe("a@outlook.com");
+    });
+  });
+
   describe("logout", () => {
     it("removes the account and deletes the cache file", async () => {
       writeFileSync(path, cacheFor(BUILT_IN));
