@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
+### Added
+
+- A Claude Desktop extension (`.mcpb`) for one-click install.
+- `mail_login` and `mail_logout` tools: the assistant signs the user in and out, so no terminal is needed. `mail-mcp logout` does the same from the command line.
+- `PRIVACY.md` and `TERMS.md`.
+
+### Changed
+
+- `MAIL_MCP_CLIENT_ID` is now optional. Without it the server uses the built-in Mail-MCP app, so no Entra registration is needed.
+- When no account is signed in or the sign-in has expired, tools now tell the assistant to call `mail_login` instead of asking the user to run a terminal command.
+- A 401 or 403 from Microsoft now passes on Microsoft's error code and message instead of guessing a cause, and tells the assistant to call `mail_logout`, then `mail_login`, if it keeps happening. It used to ask for a terminal command.
+- `mail_senders_summary` now shows, for each sender, the method `mail_unsubscribe` will use. A sender that offers both a link and a `mailto:` address shows `browser`, no longer `mailto`, since no email is needed.
+- Sign-in always shows Microsoft's account picker, so you choose which account Mail-MCP uses.
+- Releases are published from GitHub Actions with npm provenance, and each GitHub release carries the `.mcpb`.
+- The README is rewritten around the one-click install, with a security and privacy section.
+
+### Removed
+
+- The `mailto:` unsubscribe no longer sends an email. `mail_unsubscribe` returns a `mailtoUrl` link for the user to open in their own mail app, because the recipient and text came from the sender's header. `Mail.Send` and `User.Read` are no longer requested.
+
+### Fixed
+
+- Deleting the token cache (or running `mail-mcp logout`) while a server is running now signs that server out too.
+- When the token cache also held an account signed in under another client ID, the tools could answer that the sign-in had expired while `mail_login` reported the user signed in. Both now use the same account.
+- The page shown in the browser at the end of sign-in displayed raw HTML tags since 0.1.2. It is now plain text.
+- An unreadable token cache file is treated as missing, so the next sign-in replaces it. Its content can no longer appear in an error message.
+
+### Security
+
+- Upgraded `@azure/msal-node` to 7.2.2 (GHSA-xcx6-jx8p-x3h5), `@modelcontextprotocol/server` to 2.4.0 (GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq) and `zod` to 4.6.7 (GHSA-mrhx-c7xc-m3w5).
+- `mail_search` no longer follows a `cursor` (or a `@odata.nextLink`) that points outside Microsoft Graph. A crafted cursor could make 0.1.x send the access token to another host.
+- Graph requests also refuse relative paths that leave `/v1.0`, and never follow redirects.
+
 ## [0.1.2] - 2026-10-01
 
 ### Security
@@ -41,7 +76,8 @@ First public release.
 - Unsubscribe cascade: RFC 8058 one-click POST, then `mailto:`, then a URL for the assistant's browser.
 - Safe defaults: deletion moves to Deleted Items, `permanent: true` to purge, `dryRun` on bulk actions, MCP annotations on every tool.
 
-[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Rixtayz/Mail-MCP/releases/tag/v0.1.0

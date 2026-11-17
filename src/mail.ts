@@ -2,7 +2,7 @@ import { PAGE_SIZE_SCAN } from "./constants.js";
 import { bodyToText, summarizeMessage, truncate, type MessageSummary } from "./format.js";
 import { GraphClient, odataString } from "./graph.js";
 import type { BatchRequest, GraphHeader, GraphMailFolder, GraphMessage, UnsubscribeInfo } from "./types.js";
-import { oneClickPost, parseListUnsubscribe, type HostResolver } from "./unsubscribe.js";
+import { buildMailtoUrl, oneClickPost, parseListUnsubscribe, type HostResolver } from "./unsubscribe.js";
 
 const WELL_KNOWN = new Set(["inbox", "drafts", "sentitems", "deleteditems", "junkemail", "archive", "outbox"]);
 const LIST_SELECT = "id,subject,from,receivedDateTime,isRead,bodyPreview";
@@ -56,6 +56,8 @@ export interface UnsubscribeOutcome {
   ok: boolean;
   url?: string;
   mailto?: string;
+  /** A `mailto:` link for the user to open in their own mail app. The server never sends the email. */
+  mailtoUrl?: string;
   detail: string;
   from: string;
   subject: string;
@@ -318,20 +320,34 @@ export class MailService {
     const info = parseListUnsubscribe(m.internetMessageHeaders);
     const base = { from: m.from?.emailAddress?.address ?? "", subject: m.subject ?? "" };
 
+    let oneClickFailure: string | undefined;
     if (info.oneClick && info.https) {
       const r = await oneClickPost(info.https, this.fetchImpl, this.resolveHost);
       if (r.ok) return { ...base, method: "one-click", ok: true, url: info.https, detail: r.detail };
-      if (info.mailto) {
-        const viaMail = await this.unsubscribeByMail(info);
-        return { ...base, ...viaMail, detail: `${r.detail} Email fallback: ${viaMail.detail}` };
-      }
-      return { ...base, method: "browser", ok: false, url: info.https, detail: `${r.detail}` };
+      oneClickFailure = r.detail;
     }
-    if (info.mailto) {
-      return { ...base, ...(await this.unsubscribeByMail(info)) };
-    }
+    // Built only once one-click is out of the picture: nothing about the mailto link can stand in its way.
+    const mailtoUrl = buildMailtoUrl(info);
+    const mailtoFields = info.mailto && mailtoUrl ? { mailto: info.mailto, mailtoUrl } : {};
     if (info.https) {
-      return { ...base, method: "browser", ok: false, url: info.https, detail: "No one-click support: open this URL in a browser and confirm the unsubscribe." };
+      return {
+        ...base,
+        method: "browser",
+        ok: false,
+        url: info.https,
+        ...mailtoFields,
+        detail: oneClickFailure ?? "No one-click support: open this URL in a browser and confirm the unsubscribe.",
+      };
+    }
+    if (info.mailto && mailtoUrl) {
+      return {
+        ...base,
+        method: "mailto",
+        ok: false,
+        ...mailtoFields,
+        detail:
+          "This sender only accepts unsubscribe requests by email. Mail-MCP never sends email: give the user this link. It opens a pre-filled message in their own mail app, and they press Send.",
+      };
     }
     return {
       ...base,
@@ -339,21 +355,5 @@ export class MailService {
       ok: false,
       detail: "No List-Unsubscribe header. Look for an unsubscribe link in the body via mail_get_message, or remove the sender in bulk with mail_bulk_by_sender.",
     };
-  }
-
-  private async unsubscribeByMail(info: UnsubscribeInfo): Promise<Omit<UnsubscribeOutcome, "from" | "subject">> {
-    const address = info.mailto!;
-    const subject = info.mailtoSubject ?? "unsubscribe";
-    const content = info.mailtoBody ?? "unsubscribe";
-    try {
-      await this.graph.post("/me/sendMail", {
-        message: { subject, body: { contentType: "text", content }, toRecipients: [{ emailAddress: { address } }] },
-        saveToSentItems: false,
-      });
-      return { method: "mailto", ok: true, mailto: address, detail: `Unsubscribe email sent to ${address} (subject "${subject}").` };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { method: "mailto", ok: false, mailto: address, detail: `Sending to ${address} failed: ${msg}` };
-    }
   }
 }

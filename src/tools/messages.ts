@@ -115,7 +115,8 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
       title: "Summary by sender",
       description:
         "KEY TOOL FOR TRIAGE. Scans a whole folder (Inbox by default) and aggregates messages by sender: count, unread, latest message, " +
-        "and for the `top` senders the available unsubscribe method (oneClick / https / mailto). Sorted by volume. " +
+        "and for the `top` senders the unsubscribe method mail_unsubscribe would use: one-click, browser (a link to open), " +
+        "mailto (a link the user sends from their own mail app) or none. Sorted by volume. " +
         "The scan is cached for the session. Follow up with mail_unsubscribe(lastMessageId) and mail_bulk_by_sender(address).",
       inputSchema: z
         .object({
@@ -148,7 +149,8 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
         const r = await mail.sendersSummary(folder, normalizeDate(since), top);
         const lines = r.senders.map((s, i) => {
           const u = s.unsubscribe;
-          const method = u?.oneClick ? "one-click" : u?.mailto ? "mailto" : u?.https ? "browser" : "none";
+          // The order mail_unsubscribe follows: a link before a mailto, which the user would have to send by hand.
+          const method = u?.oneClick ? "one-click" : u?.https ? "browser" : u?.mailto ? "mailto" : "none";
           return `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} unread), latest ${s.lastReceived.slice(0, 10)} "${s.lastSubject}" | unsubscribe: ${method} | lastMessageId: \`${s.lastMessageId}\``;
         });
         const text = `${r.scanned} messages scanned, ${r.totalSenders} senders. Top ${r.senders.length}:\n${lines.join("\n")}`;

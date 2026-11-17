@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
 import { MailService } from "../src/mail.js";
+import { buildMailtoUrl } from "../src/unsubscribe.js";
+
+// The real buildMailtoUrl, wrapped so that one test can make it fail. Every other call passes through.
+vi.mock("../src/unsubscribe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/unsubscribe.js")>();
+  return { ...actual, buildMailtoUrl: vi.fn(actual.buildMailtoUrl) };
+});
 
 type Handler = (url: string, init: RequestInit) => unknown;
 
@@ -19,6 +27,11 @@ function service(route: Handler, unsubFetch?: typeof fetch) {
   const graph = new GraphClient({ getToken: async () => "t", fetchImpl: f, sleep: async () => {} });
   return { mail: new MailService(graph, unsubFetch ?? f, publicDns), calls };
 }
+
+/** A `fetch` stand-in for the unsubscribe POST that fails the test if it is ever called. */
+const neverPost = (async () => {
+  throw new Error("unexpected one-click POST");
+}) as unknown as typeof fetch;
 
 const folders = {
   value: [
@@ -137,19 +150,12 @@ describe("MailService.unsubscribe", () => {
     expect(posted).toBe("https://x.example/u");
   });
 
-  it("refuses one-click to a private address and falls back to mailto", async () => {
-    const posted: string[] = [];
-    const unsub = (async (url: string) => { posted.push(url); return new Response("", { status: 200 }); }) as unknown as typeof fetch;
-    let sent = false;
-    const { mail } = service((url) => {
-      if (url.endsWith("/me/sendMail")) { sent = true; return undefined; }
-      return message({ "List-Unsubscribe": "<https://192.168.1.1/unsub>, <mailto:stop@x.example>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" });
-    }, unsub);
+  it("refuses one-click to a private address and hands over the URL and the mailto link, sending nothing", async () => {
+    const { mail, calls } = service(() => message({ "List-Unsubscribe": "<https://192.168.1.1/unsub>, <mailto:stop@x.example>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), neverPost);
     const r = await mail.unsubscribe("m");
-    expect(posted).toEqual([]);
-    expect(sent).toBe(true);
-    expect(r).toMatchObject({ method: "mailto", ok: true, mailto: "stop@x.example" });
+    expect(r).toMatchObject({ method: "browser", ok: false, url: "https://192.168.1.1/unsub", mailto: "stop@x.example", mailtoUrl: "mailto:stop@x.example?subject=unsubscribe" });
     expect(r.detail).toContain("192.168.1.1");
+    expect(calls.some((c) => c.url.includes("sendMail"))).toBe(false);
   });
 
   it("refuses one-click to a loopback address and hands the URL to the browser when there is no mailto", async () => {
@@ -162,15 +168,17 @@ describe("MailService.unsubscribe", () => {
     expect(r.detail).toMatch(/open the url in a browser instead/i);
   });
 
-  it("mailto path sends a mail through Graph without saving to Sent Items", async () => {
-    let sent: unknown;
-    const { mail } = service((url, init) => {
-      if (url.endsWith("/me/sendMail")) { sent = JSON.parse(init.body as string); return undefined; }
-      return message({ "List-Unsubscribe": "<mailto:stop@x.example?subject=Unsub%20me>" });
-    });
+  it("mailto-only header returns a link for the user and sends nothing", async () => {
+    const { mail, calls } = service(() => message({ "List-Unsubscribe": "<mailto:stop@x.example?subject=Unsub%20me>" }));
     const r = await mail.unsubscribe("m");
-    expect(r).toMatchObject({ method: "mailto", ok: true, mailto: "stop@x.example" });
-    expect(sent).toMatchObject({ saveToSentItems: false, message: { subject: "Unsub me", toRecipients: [{ emailAddress: { address: "stop@x.example" } }] } });
+    expect(r).toMatchObject({ method: "mailto", ok: false, mailto: "stop@x.example", mailtoUrl: "mailto:stop@x.example?subject=Unsub%20me" });
+    expect(r.detail).toMatch(/never sends email/i);
+    expect(calls.every((c) => (c.init.method ?? "GET") === "GET")).toBe(true);
+  });
+
+  it("https and mailto without one-click returns both", async () => {
+    const { mail } = service(() => message({ "List-Unsubscribe": "<https://x.example/page>, <mailto:stop@x.example>" }));
+    expect(await mail.unsubscribe("m")).toMatchObject({ method: "browser", ok: false, url: "https://x.example/page", mailtoUrl: "mailto:stop@x.example?subject=unsubscribe" });
   });
 
   it("https without POST header → browser", async () => {
@@ -183,4 +191,44 @@ describe("MailService.unsubscribe", () => {
     const { mail } = service(() => message({}));
     expect((await mail.unsubscribe("m")).method).toBe("none");
   });
+
+  describe("with a mailto subject cut inside an emoji at the 200-character limit", () => {
+    const emojiSubject = encodeURIComponent("a" + "😀".repeat(150));
+    const unsub = (async () => new Response("", { status: 200 })) as unknown as typeof fetch;
+
+    it("one-click still goes through", async () => {
+      const { mail } = service(() => message({ "List-Unsubscribe": `<https://x.example/u>, <mailto:stop@x.example?subject=${emojiSubject}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), unsub);
+      expect(await mail.unsubscribe("m")).toMatchObject({ method: "one-click", ok: true, url: "https://x.example/u" });
+    });
+
+    it("the browser fallback still hands over a mailto link", async () => {
+      const { mail } = service(() => message({ "List-Unsubscribe": `<https://x.example/page>, <mailto:stop@x.example?subject=${emojiSubject}>` }), neverPost);
+      const r = await mail.unsubscribe("m");
+      expect(r).toMatchObject({ method: "browser", ok: false, url: "https://x.example/page", mailto: "stop@x.example" });
+      expect(new URLSearchParams(r.mailtoUrl?.split("?")[1]).get("subject")).toBe("a" + "😀".repeat(99));
+    });
+  });
+
+  it("a mailto link that cannot be built never blocks the one-click POST", async () => {
+    vi.mocked(buildMailtoUrl).mockImplementationOnce(() => {
+      throw new URIError("URI malformed");
+    });
+    try {
+      let posted = "";
+      const unsub = (async (url: string) => { posted = url; return new Response("", { status: 200 }); }) as unknown as typeof fetch;
+      const { mail } = service(() => message({ "List-Unsubscribe": "<https://x.example/u>, <mailto:stop@x.example>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), unsub);
+      expect(await mail.unsubscribe("m")).toMatchObject({ method: "one-click", ok: true });
+      expect(posted).toBe("https://x.example/u");
+    } finally {
+      vi.mocked(buildMailtoUrl).mockReset(); // drops the failure if it was never used, back to the real function
+    }
+  });
+});
+
+it("no source file mentions sendMail or Mail.Send", () => {
+  for (const f of readdirSync(new URL("../src", import.meta.url), { recursive: true }) as string[]) {
+    if (!f.endsWith(".ts")) continue;
+    const text = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    expect(text, f).not.toMatch(/sendMail|Mail\.Send/);
+  }
 });

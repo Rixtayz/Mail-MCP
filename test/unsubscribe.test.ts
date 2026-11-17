@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { oneClickPost, parseListUnsubscribe, splitListUnsubscribe } from "../src/unsubscribe.js";
+import { VERSION } from "../src/constants.js";
+import { buildMailtoUrl, oneClickPost, parseListUnsubscribe, splitListUnsubscribe } from "../src/unsubscribe.js";
 
 const h = (name: string, value: string) => ({ name, value });
 
@@ -86,6 +87,7 @@ describe("oneClickPost", () => {
     expect(captured?.method).toBe("POST");
     expect(captured?.body).toBe("List-Unsubscribe=One-Click");
     expect(captured?.redirect).toBe("manual");
+    expect((captured?.headers as Record<string, string>)["User-Agent"]).toBe(`mail-mcp/${VERSION}`);
   });
 
   it("treats redirects as failure", async () => {
@@ -190,5 +192,71 @@ describe("oneClickPost destination guard", () => {
     const r = await oneClickPost(url, f, publicDns);
     expect(urls).toEqual([url]);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("buildMailtoUrl", () => {
+  it("returns undefined without a mailto target", () => {
+    expect(buildMailtoUrl({ oneClick: false })).toBeUndefined();
+  });
+  it("defaults the subject to 'unsubscribe' and omits an absent body", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "stop@x.example" })).toBe("mailto:stop@x.example?subject=unsubscribe");
+  });
+  it("percent-encodes subject and body", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "Unsub me & go", mailtoBody: "a b\nc" }))
+      .toBe("mailto:stop@x.example?subject=Unsub%20me%20%26%20go&body=a%20b%0Ac");
+  });
+  it("carries only address, subject and body from a hostile header", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:stop@x.example?cc=victim@y.example&bcc=v2@y.example&to=v3@y.example&subject=s>" }]);
+    const url = buildMailtoUrl(info)!;
+    expect(url).toBe("mailto:stop@x.example?subject=s");
+  });
+  it("encodes an address that tries to smuggle a query", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "a@x.example?cc=v@y.example" })).toBe("mailto:a@x.example%3Fcc%3Dv@y.example?subject=unsubscribe");
+  });
+  it("yields the exact URL for a normal address through the parser", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:stop@x.example>" }]);
+    expect(buildMailtoUrl(info)).toBe("mailto:stop@x.example?subject=unsubscribe");
+  });
+  it.each([
+    ["an encoded comma", "a@x.example%2Cvictim@y.example"],
+    ["an encoded CRLF", "a@x.example%0D%0Abcc:v@y.example"],
+    ["an encoded space", "a@x.example%20v@y.example"],
+    ["an encoded question mark", "a@x.example%3Fcc=v@y.example"],
+    ["an encoded ampersand", "a@x.example%26cc=v@y.example"],
+    ["two at signs", "a@b@x.example"],
+    ["no at sign", "stop.x.example"],
+    ["an address over 254 characters", `${"a".repeat(250)}@x.example`],
+  ])("treats %s in the address as no mailto target", (_label, address) => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: `<mailto:${address}>` }]);
+    expect(info.mailto).toBeUndefined();
+    expect(buildMailtoUrl(info)).toBeUndefined();
+  });
+  it("caps subject at 200 characters and body at 1000", () => {
+    const url = buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "s".repeat(500), mailtoBody: "b".repeat(5000) })!;
+    const q = new URLSearchParams(url.split("?")[1]);
+    expect(q.get("subject")).toHaveLength(200);
+    expect(q.get("body")).toHaveLength(1000);
+  });
+  it("never cuts an emoji in half at the subject or body limit", () => {
+    // Each emoji is two UTF-16 units, so after the leading "a" both limits fall inside one; half an emoji makes encodeURIComponent throw.
+    const subject = "a" + "😀".repeat(150);
+    const body = "a" + "😀".repeat(600);
+    const info = parseListUnsubscribe([
+      { name: "List-Unsubscribe", value: `<mailto:stop@x.example?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}>` },
+    ]);
+    expect(info.mailtoSubject).toBe(subject);
+    const url = buildMailtoUrl(info)!;
+    const q = new URLSearchParams(url.split("?")[1]);
+    expect(q.get("subject")).toBe("a" + "😀".repeat(99));
+    expect(q.get("body")).toBe("a" + "😀".repeat(499));
+  });
+  it("does not throw on a lone surrogate anywhere, and replaces it", () => {
+    const url = buildMailtoUrl({ oneClick: false, mailto: "st\uD800op@x.example", mailtoSubject: "a\uD800b", mailtoBody: "\uDC00c" });
+    expect(url).toBe("mailto:st%EF%BF%BDop@x.example?subject=a%EF%BF%BDb&body=%EF%BF%BDc");
+  });
+  it("treats an address holding a lone surrogate as no mailto target", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:st\uD800op@x.example>" }]);
+    expect(info.mailto).toBeUndefined();
   });
 });

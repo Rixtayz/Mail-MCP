@@ -1,4 +1,4 @@
-import { BATCH_SIZE, GRAPH_BASE, LOGIN_COMMAND, MAX_RETRIES } from "./constants.js";
+import { BATCH_SIZE, GRAPH_BASE, MAX_RETRIES } from "./constants.js";
 import type { BatchRequest, BatchResponse, GraphPage } from "./types.js";
 
 export class GraphError extends Error {
@@ -18,15 +18,30 @@ export interface GraphClientOptions {
   baseUrl?: string;
 }
 
+// Never echoes the rejected URL: it is attacker-chosen text that would land in the assistant's context.
+const OUTSIDE_GRAPH = "Refused to call a URL outside Microsoft Graph. Pass back the cursor exactly as mail_search returned it.";
+
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// mail_login answers "Signed in" as long as a token can be had silently, so after a 401 or 403 a new
+// mail_login can leave the same token in place and the retry fail again. Signing out first breaks that loop.
+const IF_IT_PERSISTS = "If this keeps happening, call mail_logout, then mail_login.";
+
+/** "(401, Code): Microsoft's message." or "(401)." when Microsoft gave no message. */
+function said(status: number, code: string | undefined, raw: string): string {
+  const message = raw.slice(0, 300).trim();
+  const head = `(${status}${code ? ", " + code : ""})`;
+  if (!message) return `${head}.`;
+  return `${head}: ${message}${/[.!?]$/.test(message) ? "" : "."}`;
+}
 
 /** Map Graph HTTP errors to actionable messages for the model. */
 export function describeGraphError(status: number, code: string | undefined, raw: string): string {
   switch (status) {
     case 401:
-      return `Unauthorized (401): the token is expired or invalid. Ask the user to run \`${LOGIN_COMMAND}\` again.`;
+      return `Microsoft rejected the sign-in ${said(status, code, raw)} Call the mail_login tool to sign the user in again. ${IF_IT_PERSISTS}`;
     case 403:
-      return `Forbidden (403${code ? ", " + code : ""}): the app registration probably lacks the Mail.ReadWrite / Mail.Send permissions. Check the README, then run \`${LOGIN_COMMAND}\` again.`;
+      return `Microsoft refused the request ${said(status, code, raw)} ${IF_IT_PERSISTS}`;
     case 404:
       return "Not found (404): the message or folder no longer exists (moved or deleted; ids change when a message changes folder). Call mail_search or mail_list_folders again to get fresh ids.";
     case 429:
@@ -40,18 +55,41 @@ export class GraphClient {
   private readonly getToken: () => Promise<string>;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly baseUrl: string;
+  private readonly base: URL;
+  private readonly basePath: string;
 
   constructor(opts: GraphClientOptions) {
     this.getToken = opts.getToken;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? defaultSleep;
-    this.baseUrl = opts.baseUrl ?? GRAPH_BASE;
+    this.base = new URL(opts.baseUrl ?? GRAPH_BASE);
+    this.basePath = this.base.pathname.replace(/\/+$/, "");
   }
 
-  /** Absolute URL for a Graph path (or pass-through for a full nextLink URL). */
+  /**
+   * Absolute URL for a Graph path, or a full nextLink URL. The only choke point before the bearer token is
+   * attached. Both forms are resolved to a parsed URL first, so `..`, `%2e%2e` and the like are already
+   * collapsed, and only then checked to be under the base URL (parsed, not prefix-matched).
+   */
   private url(pathOrUrl: string): string {
-    return /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${this.baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+    const raw = /^https?:\/\//i.test(pathOrUrl)
+      ? pathOrUrl
+      : `${this.base.origin}${this.basePath}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+    let target: URL;
+    try {
+      target = new URL(raw);
+    } catch {
+      throw new GraphError(OUTSIDE_GRAPH, 0);
+    }
+    const inside =
+      target.protocol === this.base.protocol &&
+      target.hostname === this.base.hostname &&
+      target.port === this.base.port &&
+      target.username === "" &&
+      target.password === "" &&
+      (target.pathname === this.basePath || target.pathname.startsWith(`${this.basePath}/`));
+    if (!inside) throw new GraphError(OUTSIDE_GRAPH, 0);
+    return target.href;
   }
 
   /** Perform a request with bearer auth and retry on 429/503/504. Returns parsed JSON (or undefined for 204). */
@@ -61,10 +99,11 @@ export class GraphClient {
     body?: unknown,
     extraHeaders: Record<string, string> = {},
   ): Promise<T> {
+    const url = this.url(pathOrUrl); // refuses a foreign URL before a token is even requested
     let attempt = 0;
     for (;;) {
       const token = await this.getToken();
-      const res = await this.fetchImpl(this.url(pathOrUrl), {
+      const res = await this.fetchImpl(url, {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -73,6 +112,7 @@ export class GraphClient {
           ...extraHeaders,
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: "error", // a redirect would carry the bearer token to wherever it points
       });
 
       if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < MAX_RETRIES) {

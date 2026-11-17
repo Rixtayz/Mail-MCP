@@ -34,9 +34,36 @@ describe("GraphClient.request", () => {
     expect(calls.length).toBe(3);
   });
 
-  it("maps 401 to the npx login command, which works without a clone", async () => {
-    const { f } = mockFetch(() => json({ error: { code: "InvalidAuthenticationToken", message: "nope" } }, 401));
-    await expect(client(f).get("/me")).rejects.toThrow("npx -y @rixtay/mail-mcp login");
+  // mail_login answers "Signed in" whenever a silent token works, so a retry can hit the same error:
+  // both texts must offer a way out of that loop, and carry what Microsoft said.
+  it("maps 401 to mail_login, with Microsoft's code and message, and a way out of a login loop", async () => {
+    const { f } = mockFetch(() => json({ error: { code: "InvalidAuthenticationToken", message: "Access token has expired or is not yet valid." } }, 401));
+    const err = await client(f).get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(
+      "Microsoft rejected the sign-in (401, InvalidAuthenticationToken): Access token has expired or is not yet valid. " +
+        "Call the mail_login tool to sign the user in again. If this keeps happening, call mail_logout, then mail_login.",
+    );
+  });
+
+  it("maps 403 to Microsoft's code and message, without guessing a cause, and a way out of a login loop", async () => {
+    const { f } = mockFetch(() => json({ error: { code: "ErrorAccessDenied", message: "Access is denied. Check credentials and try again." } }, 403));
+    const err = await client(f).get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(
+      "Microsoft refused the request (403, ErrorAccessDenied): Access is denied. Check credentials and try again. " +
+        "If this keeps happening, call mail_logout, then mail_login.",
+    );
+    expect(err?.message).not.toMatch(/Mail\.ReadWrite|permission/);
+  });
+
+  it("401 and 403 texts read well without a code, or with a message that has no final period", async () => {
+    const { f } = mockFetch((_c, n) => (n === 1 ? new Response("", { status: 401 }) : json({ error: { message: "nope" } }, 403)));
+    const g = client(f);
+    const first = await g.get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(first?.message).toBe(
+      "Microsoft rejected the sign-in (401). Call the mail_login tool to sign the user in again. If this keeps happening, call mail_logout, then mail_login.",
+    );
+    const second = await g.get("/me").then(() => undefined, (e: unknown) => e as Error);
+    expect(second?.message).toBe("Microsoft refused the request (403): nope. If this keeps happening, call mail_logout, then mail_login.");
   });
 
   it("maps 404 to an actionable error", async () => {
@@ -65,6 +92,130 @@ describe("GraphClient.paginate", () => {
     const limited: number[] = [];
     for await (const x of client(f).paginate<number>("/me/messages?$top=2", 3)) limited.push(x);
     expect(limited).toEqual([1, 2, 3]);
+  });
+});
+
+const REFUSED = "Refused to call a URL outside Microsoft Graph. Pass back the cursor exactly as mail_search returned it.";
+
+describe("GraphClient never sends the token outside Microsoft Graph", () => {
+  const hostile = [
+    "https://attacker.example/x",
+    "https://graph.microsoft.com.attacker.example/v1.0/me/messages",
+    "https://graph.microsoft.com/v1.0@attacker.example/me",
+    "https://user:pass@graph.microsoft.com/v1.0/me",
+    "https://graph.microsoft.com:8443/v1.0/me",
+    "http://graph.microsoft.com/v1.0/me",
+    "https://graph.microsoft.com/beta/me",
+    "https://graph.microsoft.com/v1.0evil/me",
+  ];
+
+  it.each(hostile)("refuses %s before any network call, without echoing it", async (url) => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    const err = await client(f).get(url).then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(REFUSED);
+    expect(err?.message).not.toContain("attacker");
+    expect(err?.message).not.toContain("tok");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("accepts a real Graph URL whatever the case of scheme and host, and fetches the normalised URL", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    await client(f).get("HTTPS://GRAPH.MICROSOFT.COM/v1.0/me");
+    expect(calls.map((c) => c.url)).toEqual(["https://graph.microsoft.com/v1.0/me"]);
+  });
+
+  it("keeps relative paths working", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    await client(f).get("me/messages?$top=1");
+    expect(calls[0]?.url).toBe("https://graph.microsoft.com/v1.0/me/messages?$top=1");
+  });
+
+  const escapes = ["../beta/me", "/../beta/me", "/%2e%2e/beta/me", "../../..//attacker.example/x"];
+
+  it.each(escapes)("refuses the relative path %s that leaves /v1.0, without a network call", async (path) => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    const err = await client(f).get(path).then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(REFUSED);
+    expect(err?.message).not.toContain("attacker");
+    expect(calls).toHaveLength(0);
+  });
+
+  // A relative path is relative to the base, so /v1.0/../beta/me means /v1.0/v1.0/../beta/me: it stays under /v1.0.
+  it("keeps a relative path that dot-segments back inside /v1.0 under /v1.0", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    await client(f).get("/v1.0/../beta/me");
+    expect(calls.map((c) => c.url)).toEqual(["https://graph.microsoft.com/v1.0/beta/me"]);
+  });
+
+  // Already refused before the hardening; pinned so a parser change cannot reopen them.
+  const parserTricks = [
+    "https://graph.microsoft.com./v1.0/me",
+    "https://graph.microsoft.com\@attacker.example/v1.0/me",
+    "https://graph.micro	soft.com.attacker.example/v1.0/me",
+    "https://graph.microsoft.com/v1.0/%2e%2e/beta/me",
+  ];
+
+  it.each(parserTricks)("keeps refusing the parser trick %j", async (url) => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    const err = await client(f).get(url).then(() => undefined, (e: unknown) => e as Error);
+    expect(err?.message).toBe(REFUSED);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("sends the same request URL as before for the paths mail.ts builds", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    const g = client(f);
+    const filter = encodeURIComponent("from/emailAddress/address eq \"a@b.com\" and receivedDateTime ge 2026-01-01T00:00:00Z");
+    await g.get("/me/mailFolders?$top=250");
+    await g.get(`/me/mailFolders/AAMkAD=-_x/messages?$select=id,subject&$top=10&$filter=${filter}&$orderby=${encodeURIComponent("receivedDateTime desc")}`);
+    await g.get(`/me/messages/${encodeURIComponent("AAMk/+=")}?$select=id,subject,body`);
+    await g.get(`/me/messages?$search=${encodeURIComponent('"a b"')}`);
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://graph.microsoft.com/v1.0/me/mailFolders?$top=250",
+      "https://graph.microsoft.com/v1.0/me/mailFolders/AAMkAD=-_x/messages?$select=id,subject&$top=10&$filter=from%2FemailAddress%2Faddress%20eq%20%22a%40b.com%22%20and%20receivedDateTime%20ge%202026-01-01T00%3A00%3A00Z&$orderby=receivedDateTime%20desc",
+      "https://graph.microsoft.com/v1.0/me/messages/AAMk%2F%2B%3D?$select=id,subject,body",
+      "https://graph.microsoft.com/v1.0/me/messages?$search=%22a%20b%22",
+    ]);
+  });
+
+  // new URL() writes a literal ' in a query as %27, which is what fetch puts on the wire for the raw form too.
+  it("sends a quoted $filter value exactly as fetch would have on the wire", async () => {
+    const { f, calls } = mockFetch(() => json({ value: [] }));
+    await client(f).get(`/me/mailFolders/inbox/messages?$filter=${encodeURIComponent(`from/emailAddress/address eq ${odataString("o'neil@x.com")}`)}`);
+    expect(calls[0]?.url).toBe(
+      "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$filter=from%2FemailAddress%2Faddress%20eq%20%27o%27%27neil%40x.com%27",
+    );
+  });
+
+  it("never follows a redirect, on plain requests and on $batch", async () => {
+    const { f, calls } = mockFetch((c) => (c.url.endsWith("/$batch") ? json({ responses: [{ id: "a", status: 204 }] }) : json({ value: [] })));
+    const g = client(f);
+    await g.get("/me/messages");
+    await g.post("/me/messages/x/move", { destinationId: "y" });
+    await g.delete("/me/messages/x");
+    await g.batch([{ id: "a", method: "DELETE", url: "/me/messages/x" }]);
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    expect(calls.map((c) => c.init.redirect)).toEqual(calls.map(() => "error"));
+  });
+
+  it("follows a real @odata.nextLink in paginate", async () => {
+    const next = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$skip=50&$top=50";
+    const { f, calls } = mockFetch((_c, n) => (n === 1 ? json({ value: [1], "@odata.nextLink": next }) : json({ value: [2] })));
+    const out: number[] = [];
+    for await (const x of client(f).paginate<number>("/me/messages")) out.push(x);
+    expect(out).toEqual([1, 2]);
+    expect(calls[1]?.url).toBe(next);
+  });
+
+  it("stops paginating on a hostile @odata.nextLink and never fetches it", async () => {
+    const { f, calls } = mockFetch((_c, n) => (n === 1 ? json({ value: [1], "@odata.nextLink": "https://attacker.example/steal" }) : json({ value: [2] })));
+    const out: number[] = [];
+    const run = async () => {
+      for await (const x of client(f).paginate<number>("/me/messages")) out.push(x);
+    };
+    await expect(run()).rejects.toThrow(REFUSED);
+    expect(out).toEqual([1]);
+    expect(calls).toHaveLength(1);
   });
 });
 

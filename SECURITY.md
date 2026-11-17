@@ -1,6 +1,6 @@
 # Security policy
 
-Mail-MCP gives an AI assistant access to a personal mailbox. Its promises are that it only acts when a tool is called, that destructive actions stay explicit and reversible by default, that it never exposes a generic "send email" capability, and that the token cache stays on your machine.
+Mail-MCP gives an AI assistant access to a personal mailbox. Its promises are that it only acts when a tool is called, that destructive actions stay explicit and reversible by default, that it never sends email and never asks for the permission to, and that the token cache stays on your machine.
 
 A break in any of those promises is treated as a security issue.
 
@@ -8,7 +8,8 @@ A break in any of those promises is treated as a security issue.
 
 - A tool result, log line or error message that leaks the access or refresh token, or the token cache contents.
 - The token cache written with permissions wider than owner-only, or outside `~/.mail-mcp/` / `MAIL_MCP_CACHE_PATH`.
-- A way to send an email to an arbitrary recipient, with arbitrary content, through any tool (the `Mail.Send` permission is meant for `mailto:` unsubscribe requests only).
+- Any path that sends an email, or any request for the `Mail.Send` permission. Mail-MCP only requests `Mail.ReadWrite`.
+- A `mail_login` or `mail_logout` result that contains a token, or the token cache contents. `mail_login` may return the Microsoft sign-in URL, which holds no token.
 - A permanent deletion that happens without `permanent: true`, or a bulk action that ignores `dryRun`.
 - A network request triggered by message content other than the documented RFC 8058 one-click unsubscribe POST, or a one-click POST that reaches a loopback, private or link-local address.
 - A dependency vulnerability that is actually reachable from this server.

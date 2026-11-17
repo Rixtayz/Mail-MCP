@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
+import { VERSION } from "./constants.js";
 import type { GraphHeader, UnsubscribeInfo } from "./types.js";
 
 const ONE_CLICK_BODY = "List-Unsubscribe=One-Click";
@@ -21,12 +22,35 @@ export function splitListUnsubscribe(value: string): string[] {
   return out;
 }
 
+/** A lone UTF-16 surrogate, half of a character such as an emoji. In `u` mode a whole pair is one code point, never matched. */
+const LONE_SURROGATE = /\p{Cs}/u;
+
+/**
+ * True for one plain address: no list separator, whitespace, control or URI/header delimiter,
+ * no lone surrogate, exactly one `@`.
+ */
+function isSingleAddress(address: string): boolean {
+  return (
+    address.length <= 254 &&
+    !/[\s\x00-\x1f\x7f,;<>"?&%]/.test(address) &&
+    !LONE_SURROGATE.test(address) &&
+    address.split("@").length === 2 &&
+    !address.startsWith("@") &&
+    !address.endsWith("@")
+  );
+}
+
 function parseMailto(uri: string): { address: string; subject?: string; body?: string } | undefined {
   if (!/^mailto:/i.test(uri)) return undefined;
   const rest = uri.slice("mailto:".length);
   const [addrPart, query = ""] = rest.split("?", 2);
-  const address = decodeURIComponent(addrPart ?? "").trim();
-  if (!address) return undefined;
+  let address: string;
+  try {
+    address = decodeURIComponent(addrPart ?? "").trim();
+  } catch {
+    return undefined;
+  }
+  if (!isSingleAddress(address)) return undefined;
   const params = new URLSearchParams(query);
   const subject = params.get("subject") ?? undefined;
   const body = params.get("body") ?? undefined;
@@ -59,6 +83,33 @@ export function parseListUnsubscribe(headers: GraphHeader[] | undefined): Unsubs
   const postOk = !!post && post.replace(/\s+/g, "").toLowerCase() === ONE_CLICK_BODY.toLowerCase();
   info.oneClick = postOk && !!info.https && /^https:\/\//i.test(info.https);
   return info;
+}
+
+const MAILTO_SUBJECT_MAX = 200;
+const MAILTO_BODY_MAX = 1000;
+
+/**
+ * `s` cut to at most `max` UTF-16 units, then percent-encoded. Never throws: the cut never splits a
+ * surrogate pair, and any lone surrogate left becomes U+FFFD (encodeURIComponent throws on one).
+ */
+function encodeCut(s: string, max = Number.POSITIVE_INFINITY): string {
+  let cut = s.slice(0, max);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return encodeURIComponent(cut.replace(new RegExp(LONE_SURROGATE, "gu"), "\uFFFD"));
+}
+
+/**
+ * A `mailto:` link the user can open in their own mail app, built from the header's
+ * address, subject and body only. Any other field the sender put in the header (cc, bcc, to)
+ * is dropped, and everything is percent-encoded so nothing can add a query parameter.
+ * Never throws, whatever the sender put in the header.
+ */
+export function buildMailtoUrl(info: UnsubscribeInfo): string | undefined {
+  if (!info.mailto) return undefined;
+  const address = encodeCut(info.mailto).replace(/%40/g, "@");
+  const query = [`subject=${encodeCut(info.mailtoSubject ?? "unsubscribe", MAILTO_SUBJECT_MAX)}`];
+  if (info.mailtoBody) query.push(`body=${encodeCut(info.mailtoBody, MAILTO_BODY_MAX)}`);
+  return `mailto:${address}?${query.join("&")}`;
 }
 
 export interface OneClickResult {
@@ -164,7 +215,7 @@ export async function oneClickPost(
   try {
     const res = await fetchImpl(url, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "mail-mcp/0.1" },
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": `mail-mcp/${VERSION}` },
       body: ONE_CLICK_BODY,
       redirect: "manual",
       signal: controller.signal,

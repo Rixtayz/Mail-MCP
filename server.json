@@ -8,13 +8,13 @@
     "url": "https://github.com/Rixtayz/Mail-MCP",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@rixtay/mail-mcp",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -22,8 +22,8 @@
       "environmentVariables": [
         {
           "name": "MAIL_MCP_CLIENT_ID",
-          "description": "Application (client) ID of your Microsoft Entra app registration (see README). Run `npx -y @rixtay/mail-mcp login` once to sign in.",
-          "isRequired": true,
+          "description": "Optional. Application (client) ID of your own Microsoft Entra app registration. Leave unset to use the built-in Mail-MCP app.",
+          "isRequired": false,
           "isSecret": false,
           "format": "string"
         },
