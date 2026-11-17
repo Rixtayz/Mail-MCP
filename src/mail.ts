@@ -330,19 +330,20 @@ export class MailService {
 
     // A link is only ever POSTed to or handed to the browser once its host is known to be public.
     // A link to a non-public host, or one that cannot be checked, blocks everything, the mailto link
-    // included: the message is not to be trusted. A plain http link is simply not used.
+    // included, whatever its scheme: the message is not to be trusted. A plain http link to a
+    // public host is simply not used.
     const httpOnly = !!info.https && !/^https:\/\//i.test(info.https);
     const link = httpOnly ? undefined : info.https;
     let oneClickFailure: string | undefined;
-    if (link) {
+    if (info.https) {
       let refusal: Refusal | undefined;
-      if (info.oneClick) {
+      if (info.oneClick && link) {
         const r = await oneClickPost(link, this.unsubscribeNetwork);
         if (r.ok) return { ...base, method: "one-click", ok: true, url: link, detail: r.detail };
         refusal = r.refusal;
         oneClickFailure = r.detail;
       } else {
-        refusal = await checkUnsubscribeLink(link, this.unsubscribeNetwork.resolveHost);
+        refusal = await checkUnsubscribeLink(info.https, this.unsubscribeNetwork.resolveHost);
       }
       if (refusal) return { ...base, method: "blocked", ok: false, detail: blockedDetail(refusal) };
     }

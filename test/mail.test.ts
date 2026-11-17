@@ -229,6 +229,43 @@ describe("MailService.unsubscribe", () => {
   });
 
   it.each([
+    ["a private address, with a mailto", "<http://192.168.1.1/admin>, <mailto:stop@x.example>"],
+    ["localhost, with a mailto", "<http://localhost:8080/x>, <mailto:stop@x.example>"],
+    ["a private address, alone", "<http://192.168.1.1/admin>"],
+  ])("blocks a plain http link to %s as a local-network link, with no mailto", async (_label, header) => {
+    const { mail, posts } = service(() => message({ "List-Unsubscribe": header }));
+    expect(await mail.unsubscribe("m")).toEqual(blocked(LOCAL_LINK));
+    expect(posts.attempts).toEqual([]);
+  });
+
+  it("blocks a plain http link whose name resolves to the local network, with no mailto", async () => {
+    const dns: HostResolver = async () => [{ address: "10.0.0.1", family: 4 }];
+    const { mail } = service(() => message({ "List-Unsubscribe": "<http://router.example/admin>, <mailto:stop@x.example>" }), { resolveHost: dns });
+    expect(await mail.unsubscribe("m")).toEqual(blocked(LOCAL_LINK));
+  });
+
+  it("blocks a plain http link whose host cannot be checked, with no mailto", async () => {
+    const dns: HostResolver = async () => {
+      throw new Error("getaddrinfo ENOTFOUND nowhere.example");
+    };
+    const { mail } = service(() => message({ "List-Unsubscribe": "<http://nowhere.example/u>, <mailto:stop@x.example>" }), { resolveHost: dns });
+    expect(await mail.unsubscribe("m")).toEqual(
+      blocked("This unsubscribe link could not be checked (nowhere.example could not be resolved: getaddrinfo ENOTFOUND nowhere.example), so it was not opened."),
+    );
+  });
+
+  it("checks the host of a plain http link on a public host before falling back to the mailto link", async () => {
+    const asked: string[] = [];
+    const dns: HostResolver = async (host) => {
+      asked.push(host);
+      return publicDns(host);
+    };
+    const { mail } = service(() => message({ "List-Unsubscribe": "<http://news.example/u>, <mailto:stop@x.example>" }), { resolveHost: dns });
+    expect(await mail.unsubscribe("m")).toMatchObject({ method: "mailto", mailtoUrl: "mailto:stop@x.example?subject=unsubscribe" });
+    expect(asked).toEqual(["news.example"]);
+  });
+
+  it.each([
     ["without", {}],
     ["with", { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }],
   ])("blocks a plain http link with no mailto %s List-Unsubscribe-Post", async (_label, post) => {
