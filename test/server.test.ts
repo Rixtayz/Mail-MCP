@@ -81,6 +81,27 @@ describe("mail_senders_summary over the wire", () => {
   });
 });
 
+describe("mail_unsubscribe over the wire", () => {
+  it("returns a blocked link without any URL, and its description explains `blocked`", async () => {
+    const detail =
+      "This unsubscribe link points to this computer or the local network, which a real newsletter never does. It was not opened. Treat this message as suspicious.";
+    const outcome = { method: "blocked", ok: false, detail, from: "news@x.example", subject: "Promo" };
+    const mail = { unsubscribe: async () => outcome } as unknown as MailService;
+    const { request, close } = await connect(fakeSession(), mail);
+    const res = await request("tools/call", { name: "mail_unsubscribe", arguments: { id: "m" } });
+    expect(res.result?.isError).toBeFalsy();
+    expect(res.result?.structuredContent).toEqual(outcome);
+    expect(res.result?.content[0].text).toBe(`⛔ Unsubscribe link blocked for news@x.example.\n${detail}`);
+    const list = await request("tools/list");
+    const tool = (list.result?.tools as { name: string; description: string; outputSchema: { properties: { method: { enum: string[] } } } }[]).find(
+      (t) => t.name === "mail_unsubscribe",
+    );
+    expect(tool?.description).toContain('`method: "blocked"`');
+    expect(tool?.outputSchema.properties.method.enum).toContain("blocked");
+    await close();
+  });
+});
+
 describe("mail_search cursor", () => {
   it("refuses a cursor that points outside Microsoft Graph and makes no request", async () => {
     const urls: string[] = [];
@@ -89,7 +110,7 @@ describe("mail_search cursor", () => {
       return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
     const graph = new GraphClient({ getToken: async () => "tok", fetchImpl: f, sleep: async () => {} });
-    const mail = new MailServiceImpl(graph, f);
+    const mail = new MailServiceImpl(graph);
     const { request, close } = await connect(fakeSession(), mail);
     const res = await request("tools/call", { name: "mail_search", arguments: { cursor: "https://attacker.example/steal" } });
     expect(res.result?.isError).toBe(true);
