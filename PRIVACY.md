@@ -1,6 +1,6 @@
 # Privacy
 
-Mail-MCP is open-source software that lets an AI assistant work on your personal Outlook.com / Hotmail mailbox. This page says what happens to your data.
+Mail-MCP is open-source software that lets an AI assistant work on your personal Outlook mailbox (Outlook.com, Hotmail, Live or MSN address). This page says what happens to your data.
 
 ## Who publishes it
 

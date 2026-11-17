@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-17
+
+### Changed
+
+- Presented as Mail-MCP for personal Outlook: one name for Outlook.com, Hotmail, Live and MSN addresses. The Claude Desktop extension is now called "Mail-MCP for personal Outlook", and the npm, extension and MCP Registry descriptions list the supported addresses.
+
 ## [0.2.1] - 2026-11-17
 
 ### Fixed
@@ -82,7 +88,8 @@ First public release.
 - Unsubscribe cascade: RFC 8058 one-click POST, then `mailto:`, then a URL for the assistant's browser.
 - Safe defaults: deletion moves to Deleted Items, `permanent: true` to purge, `dryRun` on bulk actions, MCP annotations on every tool.
 
-[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.1...v0.1.2

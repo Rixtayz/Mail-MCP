@@ -1,11 +1,11 @@
 {
   "manifest_version": "0.3",
   "name": "mail-mcp",
-  "display_name": "Mail-MCP (Outlook.com and Hotmail)",
-  "version": "0.2.1",
+  "display_name": "Mail-MCP for personal Outlook",
+  "version": "0.2.2",
   "icon": "icon.png",
-  "description": "Read, search, file, delete and unsubscribe from newsletters in a personal Outlook.com / Hotmail mailbox.",
-  "long_description": "Mail-MCP lets Claude triage a personal Outlook.com or Hotmail mailbox through Microsoft Graph: list folders, search and read messages, summarise senders, move or delete messages, and unsubscribe from mailing lists. Claude signs you in from the chat. Mail-MCP talks only to Microsoft, plus the sender's own unsubscribe address when you ask to unsubscribe.",
+  "description": "Personal Outlook mailbox (Outlook.com, Hotmail, Live, MSN): read, search, file, delete and unsubscribe from newsletters.",
+  "long_description": "Mail-MCP lets Claude triage a personal Outlook mailbox (Outlook.com, Hotmail, Live or MSN address) through Microsoft Graph: list folders, search and read messages, summarise senders, move or delete messages, and unsubscribe from mailing lists. Claude signs you in from the chat. Mail-MCP talks only to Microsoft, plus the sender's own unsubscribe address when you ask to unsubscribe.",
   "author": {
     "name": "Rixtayz"
   },
@@ -17,7 +17,7 @@
   "homepage": "https://github.com/Rixtayz/Mail-MCP#readme",
   "support": "https://github.com/Rixtayz/Mail-MCP/issues",
   "privacy_policies": ["https://github.com/Rixtayz/Mail-MCP/blob/main/PRIVACY.md"],
-  "keywords": ["outlook", "hotmail", "email", "microsoft-graph", "newsletter", "unsubscribe"],
+  "keywords": ["outlook", "personal outlook", "outlook.com", "hotmail", "email", "microsoft-graph", "newsletter", "unsubscribe"],
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",
@@ -39,7 +39,7 @@
     { "name": "mail_delete", "description": "Delete one or more messages (to Deleted Items by default)." },
     { "name": "mail_bulk_by_sender", "description": "Move or delete every message from one sender in a folder, with a dry-run option." },
     { "name": "mail_unsubscribe", "description": "Unsubscribe from the mailing list of a message: one-click, a link to open, or an email link you send yourself." },
-    { "name": "mail_login", "description": "Sign in to the Outlook.com mailbox through the browser." },
+    { "name": "mail_login", "description": "Sign in to the personal Outlook mailbox through the browser." },
     { "name": "mail_logout", "description": "Sign out and remove the sign-in stored on this computer." }
   ],
   "user_config": {
