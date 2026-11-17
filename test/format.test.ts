@@ -72,6 +72,21 @@ describe("bodyToText drops content hidden from the reader", () => {
     ["a hidden link", '<a href="https://evil.example/SECRET" style="display:none">x</a>'],
     ["a link inside visibility:hidden", '<div style="visibility:hidden"><a href="https://evil.example/SECRET">x</a></div>'],
     ["a hidden table row", '<table><tr style="display:none"><td>SECRET</td></tr><tr><td>cell</td></tr></table>'],
+    // A browser drops a declaration whose value is not valid, so an earlier hiding one still applies.
+    ["display:none, then a display that is not valid", '<div style="display:none;display:xyz">SECRET</div>'],
+    ["display:none, then an empty display", '<div style="display:none;display:">SECRET</div>'],
+    ["opacity:0, then an opacity that is not valid", '<div style="opacity:0;opacity:abc">SECRET</div>'],
+    ["opacity in exponent notation", '<div style="opacity:0e0">SECRET</div>'],
+    ["font-size:0, then a font size that is not valid", '<span style="font-size:0;font-size:big">SECRET</span>'],
+    ["visibility:hidden, then a visibility that is not valid", '<span style="visibility:hidden;visibility:nope">SECRET</span>'],
+    ["height:0 and overflow:hidden, then a height that is not valid", '<div style="height:0;overflow:hidden;height:tall">SECRET</div>'],
+    ["overflow:hidden and height:0, then an overflow that is not valid", '<div style="height:0;overflow:hidden;overflow:maybe">SECRET</div>'],
+    // The font shorthand sets the font size too.
+    ["the font:0/0 hack", '<span style="font:0/0 a">SECRET</span>'],
+    ["a font shorthand of zero size after a visible font size", '<span style="font-size:14px;font:0/0 a">SECRET</span>'],
+    ["font-size:0 after a font shorthand", '<span style="font:15px Arial;font-size:0">SECRET</span>'],
+    ["a font shorthand without a family, which is not valid, inside font-size:0", '<div style="font-size:0"><span style="font:15px">SECRET</span></div>'],
+    ["an inline font-size:0 on an element with a class", '<td style="font-size:14px"><span class="c" style="font-size:0">SECRET</span></td>'],
   ])("%s", (_, hidden) => {
     const t = html(`<p>Before</p>${hidden}<p>After</p>`);
     expect(t).toContain("Before");
@@ -97,6 +112,17 @@ describe("bodyToText drops content hidden from the reader", () => {
     ['aria-hidden="false"', '<div aria-hidden="false">SHOWN</div>'],
     ["display:none written in another attribute", '<div title="display:none" class="display:none">SHOWN</div>'],
     ["a property that only ends in display", '<div style="x-display:none">SHOWN</div>'],
+    // A later valid declaration does override an earlier hiding one.
+    ["display:none, then display:block", '<div style="display:none;display:block">SHOWN</div>'],
+    ["display:none, then a two-keyword display", '<div style="display:none;display:inline flow-root">SHOWN</div>'],
+    ["opacity:0, then opacity:1", '<div style="opacity:0;opacity:1">SHOWN</div>'],
+    ["font-size:0, then font-size:14px", '<span style="font-size:0;font-size:14px">SHOWN</span>'],
+    ["visibility:hidden, then visibility:visible", '<span style="visibility:hidden;visibility:visible">SHOWN</span>'],
+    // Under a font-size:0 wrapper, the size can come back other than by an inline font-size.
+    ["a font shorthand with a line height inside font-size:0", '<td style="font-size:0"><div style="font:15px/1.5 Arial,sans-serif">SHOWN</div></td>'],
+    ["a font shorthand with a weight inside font-size:0", '<td style="font-size:0px"><span style="font: bold 14px Arial">SHOWN</span></td>'],
+    ["text sized by a class inside font-size:0", '<style>.c{font-size:14px}</style><td style="font-size:0"><div class="c">SHOWN</div></td>'],
+    ["a font element with a size inside font-size:0", '<td style="font-size:0"><font size="3">SHOWN</font></td>'],
   ])("but keeps %s", (_, visible) => {
     const t = html(`<p>Before</p>${visible}<p>After</p>`);
     expect(t).toContain("SHOWN");
@@ -106,6 +132,23 @@ describe("bodyToText drops content hidden from the reader", () => {
   it("keeps an image link inside a font-size:0 cell", () => {
     expect(html('<td style="font-size:0px"><a href="https://news.example/offer"><img src="https://cdn.example/a.png"></a></td>')).toBe(
       "https://news.example/offer",
+    );
+  });
+
+  it("keeps a hybrid two-column newsletter readable under its font-size:0 wrappers, and drops its hidden text", () => {
+    const newsletter = readFileSync(new URL("./fixtures/hybrid-newsletter.html", import.meta.url), "utf8");
+    expect(html(newsletter)).toBe(
+      [
+        "This week at Lakeside Books",
+        "",
+        "The Quiet Harbour",
+        "A debut novel set on the Maine coast. Read an extract [https://lakeside.example/books/quiet-harbour]",
+        "",
+        "Maps of Elsewhere",
+        "Essays on travel and memory. Read an extract [https://lakeside.example/books/maps-of-elsewhere]",
+        "",
+        "Reading night: Thursday 7 pm, 12 Lake Road. Unsubscribe [https://lakeside.example/unsubscribe?u=42]",
+      ].join("\n"),
     );
   });
 

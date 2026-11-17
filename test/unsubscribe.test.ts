@@ -475,6 +475,10 @@ describe("buildMailtoUrl", () => {
     ["an encoded zero-width space", "st%E2%80%8Bop@x.example"],
     ["a zero-width joiner", "st\u200Dop@x.example"],
     ["an encoded C1 control character", "stop%C2%85@x.example"],
+    ["an encoded variation selector", "stop%EF%B8%8F@x.example"],
+    ["an encoded supplementary variation selector", "stop%F3%A0%84%80%F3%A0%84%80@x.example"],
+    ["an encoded combining grapheme joiner", "st%CD%8Fop@x.example"],
+    ["an encoded Mongolian variation selector", "st%E1%A0%8Bop@x.example"],
   ])("treats %s in the address as no mailto target", (_label, address) => {
     const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: `<mailto:${address}>` }]);
     expect(info.mailto).toBeUndefined();
