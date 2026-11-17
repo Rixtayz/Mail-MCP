@@ -3,6 +3,7 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { VERSION } from "./constants.js";
+import { removeInvisible } from "./format.js";
 import type { GraphHeader, UnsubscribeInfo } from "./types.js";
 
 const ONE_CLICK_BODY = "List-Unsubscribe=One-Click";
@@ -87,15 +88,16 @@ function parseMailto(uri: string): { address: string; subject?: string; body?: s
   }
   if (!isSingleAddress(address)) return undefined;
   const params = new URLSearchParams(query);
-  const subject = cleanText(params.get("subject") ?? "", MAILTO_SUBJECT_MAX);
-  const body = cleanBody(params.get("body") ?? "", MAILTO_BODY_MAX);
+  // Shown raw by mail_get_message and mail_senders_summary, so cleaned like any text from a message.
+  const subject = cleanText(removeInvisible(params.get("subject") ?? ""), MAILTO_SUBJECT_MAX);
+  const body = cleanBody(removeInvisible(params.get("body") ?? ""), MAILTO_BODY_MAX);
   return { address, ...(subject ? { subject } : {}), ...(body ? { body } : {}) };
 }
 
 /**
  * Parse List-Unsubscribe / List-Unsubscribe-Post headers into structured info. An https link
  * wins over an http one; the mailto subject and body come without control characters (the body
- * keeps its line breaks, as CRLF), capped at 200 and 1000 characters.
+ * keeps its line breaks, as CRLF) or invisible characters, capped at 200 and 1000 characters.
  */
 export function parseListUnsubscribe(headers: GraphHeader[] | undefined): UnsubscribeInfo {
   const lu = header(headers, "List-Unsubscribe");

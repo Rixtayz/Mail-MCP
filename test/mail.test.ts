@@ -468,6 +468,79 @@ describe("MailService.unsubscribe", () => {
   });
 });
 
+describe("MailService cleans what comes from a message", () => {
+  it("getMessage: body, subject, sender, recipients (at most 50) and the mailto subject and body", async () => {
+    const toRecipients = Array.from({ length: 60 }, (_, i) => ({ emailAddress: { name: `R${i}`, address: `r${i}@x.example\u202E` } }));
+    const { mail } = service(() => ({
+      id: "m",
+      subject: "Hello\r\nBcc: you\u{E0041}",
+      from: { emailAddress: { name: "News\u200B", address: "news@x.example" } },
+      toRecipients,
+      body: { contentType: "text", content: "Line one\u202E\r\nLine two\u{E0049}\u001b[2J" },
+      internetMessageHeaders: [{ name: "List-Unsubscribe", value: "<mailto:stop@x.example?subject=Stop%E2%80%AE%F3%A0%81%81&body=Ple%E2%80%8Base%EF%B8%8F>" }],
+    }));
+    const r = await mail.getMessage("m");
+    expect(r.summary.subject).toBe("Hello Bcc: you");
+    expect(r.summary.fromName).toBe("News");
+    expect(r.body).toBe("Line one\nLine two[2J");
+    expect(r.to).toEqual(Array.from({ length: 50 }, (_, i) => `r${i}@x.example`));
+    expect(r.toTotal).toBe(60);
+    expect(r.unsubscribe.mailtoSubject).toBe("Stop");
+    expect(r.unsubscribe.mailtoBody).toBe("Please");
+  });
+
+  it("sendersSummary: sender name and address, latest subject", async () => {
+    const { mail } = service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        return { responses: reqs.map((r) => ({ id: r.id, status: 200, body: { id: r.id, internetMessageHeaders: [] } })) };
+      }
+      if (url.includes("/messages")) {
+        return {
+          value: [
+            {
+              id: "m1",
+              subject: "Sale\nends\u202E today",
+              isRead: true,
+              receivedDateTime: "2025-01-01T10:00:00Z",
+              from: { emailAddress: { address: "News@X.example\u200B", name: "X\u{E0041} News\r\n" + "n".repeat(300) } },
+            },
+          ],
+        };
+      }
+      return folders;
+    });
+    const r = await mail.sendersSummary(undefined, undefined, 10);
+    expect(r.senders[0]).toMatchObject({
+      address: "news@x.example",
+      domain: "x.example",
+      name: ("X News " + "n".repeat(300)).slice(0, 200),
+      lastSubject: "Sale ends today",
+    });
+  });
+
+  it("listFolders: folder names and paths, which then resolve", async () => {
+    const parent = "P".padEnd(70, "p");
+    const child = "C".padEnd(70, "c");
+    const { mail } = service((url) =>
+      url.includes("/childFolders")
+        ? { value: [{ id: child, displayName: "20\u202E25\r\n", parentFolderId: parent, childFolderCount: 0 }] }
+        : { value: [{ id: parent, displayName: "News\u200Bletters", childFolderCount: 1 }] },
+    );
+    const list = await mail.listFolders();
+    expect(list.map((f) => [f.name, f.path])).toEqual([
+      ["Newsletters", "Newsletters"],
+      ["2025", "Newsletters/2025"],
+    ]);
+    expect(await mail.resolveFolderId("Newsletters/2025")).toBe(child);
+  });
+
+  it("unsubscribe: sender address and subject", async () => {
+    const { mail } = service(() => ({ id: "m", subject: "Promo\r\n\u202Eout", from: { emailAddress: { address: "news@x.example\u200B" } }, internetMessageHeaders: [] }));
+    expect(await mail.unsubscribe("m")).toMatchObject({ method: "none", from: "news@x.example", subject: "Promo out" });
+  });
+});
+
 it("no source file mentions sendMail or Mail.Send", () => {
   for (const f of readdirSync(new URL("../src", import.meta.url), { recursive: true }) as string[]) {
     if (!f.endsWith(".ts")) continue;
