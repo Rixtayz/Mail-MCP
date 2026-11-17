@@ -131,26 +131,38 @@ const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "scrip
 // ---------- Inline styles, read fail closed ----------
 // Emulating what a browser accepts cannot be won, so the reading fails closed, in two ways.
 //
-// Hiding is looked for twice: in the declarations as CSS splits them, and in the pieces between
-// every two `;`, whatever quotes, url() or blocks surround them. A hiding declaration found either
-// way applies, so a construct the CSS split might misread cannot swallow a later `display:none`.
-// Hiding is read loosely: CSS escapes decoded, any whitespace trimmed, any case folded.
+// Hiding is looked for twice: in the declarations as CSS splits them, and by name. The scan by
+// name runs on the style with its CSS escapes decoded: wherever a property that can hide content
+// is named, not as the end of a longer name, and followed, after whitespace and comments, by a
+// colon, what follows is read as its value, up to the next `;`, `{` or `}`, comments removed (a
+// comment may hold a `;`). It ignores the quotes, url(), brackets, comments and at-rules around
+// the name, so nothing the CSS split might misread can hide a declaration from it, and a hiding
+// declaration counts wherever it stands. A hiding declaration found either way applies. The cost,
+// accepted: one written inside a quoted string, a url() or a comment hides the element too.
+// Hiding is read loosely: any whitespace trimmed, any case folded.
 //
 // Showing again (a later declaration of the same property, or a visible font size under a zero
 // size) counts only from a declaration as CSS splits it, written in plain ASCII (a quoted family
 // name in the font shorthand aside) without a backslash, whose whole value matches a short
 // allowlist exactly, the way CSS reads it: only ASCII whitespace trimmed, only ASCII case folded.
-// Nor does any declaration count once the split meets something it cannot place the way CSS does,
-// a backslash included. Anything else (an unknown or vendor keyword, a keyword combination, a
-// function, a trailing dot, a sign, a no-break space, a Kelvin sign) is ignored, so hidden content
-// stays hidden.
+// Nor does any declaration count once the split meets something it cannot place the way CSS does:
+// a backslash, a line break in a quoted string, a closing bracket that does not match the block
+// it is in, a `}` that closes none, or an at-rule (CSS may end one at its {} block). Anything else
+// (an unknown or vendor keyword, a keyword combination, a function, a trailing dot, a sign, a
+// no-break space, a Kelvin sign) is ignored, so hidden content stays hidden.
 //
-// On display, visibility, opacity, height and overflow, a function, var() included, counts as
-// hiding: a custom property can carry `none` or `0`. A font size given by a function, such as
-// clamp() or calc(), which modern newsletters use, counts as visible instead, unless the element is
-// under a zero size or has a zero size declared too. So a zero size written as a function is not
-// caught (accepted): `font-size:var(--z)` with `--z:0`, `font-size:calc(0px)`,
-// `font-size:clamp(0px,0vw,0px)`, `font:calc(0px) a`.
+// What hides: display:none (and the table columns); visibility:hidden or collapse; an opacity of
+// zero or below; a font size of zero or too small to read (below 1px or 1pt, a tenth of an em,
+// 10%); a zero height, max-height, width or max-width with overflow that clips; a transform, scale
+// or zoom that leaves less than a tenth of the content on an axis.
+//
+// On display, visibility, opacity, height, width, overflow, scale and zoom, a function, var()
+// included, counts as hiding: a custom property can carry `none` or `0`. So does var(), env() or
+// attr() in a transform, and a function inside one of its scales. A font size given by a
+// function, such as clamp() or calc(), which modern newsletters use, counts as visible instead,
+// unless the element is under a zero size or has a zero size declared too. So a zero size written
+// as a function is not caught (accepted): `font-size:var(--z)` with `--z:0`,
+// `font-size:calc(0px)`, `font-size:clamp(0px,0vw,0px)`, `font:calc(0px) a`.
 
 /** One declaration of an inline style: lower-case property and value, whitespace collapsed, without `!important`. */
 interface Declaration {
@@ -159,149 +171,321 @@ interface Declaration {
   important: boolean;
 }
 
-/** A piece of an inline style, `at` the offset where it starts. */
-interface Piece {
+/**
+ * A declaration as CSS splits it: `at` the offset where it starts, `first` that of its first
+ * character other than whitespace or a comment (or where it ends); `clean` when it may show
+ * content again (see strictPieces).
+ */
+interface StrictPiece {
   at: number;
+  first: number;
   text: string;
-}
-
-/** A declaration as CSS splits it; `clean` when it may show content again (see strictPieces). */
-interface StrictPiece extends Piece {
   clean: boolean;
 }
 
-/** `text` with each comment, closed or not, replaced by a space. */
-function withoutComments(text: string): string {
-  let out = "";
-  let from = 0;
-  for (let open = text.indexOf("/*"); open >= 0; open = text.indexOf("/*", from)) {
-    const close = text.indexOf("*/", open + 2);
-    out += text.slice(from, open) + " ";
-    from = close < 0 ? text.length : close + 2;
-  }
-  return out + text.slice(from);
+/**
+ * A declaration found by its property's name (see scanDeclarations): `at` the offset of the name,
+ * `value` its value as written (comments removed), `end` the offset where that value ends in a
+ * style without comments or escapes (-1 otherwise); `failClosed` when it counts as hiding whatever
+ * its value.
+ */
+interface ScannedDeclaration {
+  at: number;
+  end: number;
+  property: string;
+  value: string;
+  failClosed: boolean;
 }
 
-/** The pieces of an inline style between every two `;`, whatever surrounds them, comments replaced by a space. */
-function naivePieces(style: string): Piece[] {
-  const out: Piece[] = [];
-  let at = 0;
-  for (let semicolon = style.indexOf(";"); semicolon >= 0; semicolon = style.indexOf(";", at)) {
-    out.push({ at, text: withoutComments(style.slice(at, semicolon)) });
-    at = semicolon + 1;
-  }
-  out.push({ at, text: withoutComments(style.slice(at)) });
-  return out;
-}
+/** The properties whose declarations can hide content; the others are not read. */
+const STYLE_PROPERTIES = new Set(
+  "display visibility opacity height max-height width max-width overflow overflow-x overflow-y font-size font transform scale zoom all".split(" "),
+);
 
+/** ASCII whitespace, the only whitespace CSS knows. */
+const CSS_SPACE_CHARACTERS = " \t\n\r\f";
 const OPENERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
-/** In an unquoted url(), what CSS reads otherwise than the split would: a quote, a bracket, a comment, an escape. */
-const URL_TROUBLE = /["'()[\]{}\\]|\/\*/;
+/** Before `url`, a character that makes it the end of a longer name, a hash (#url) or an at-keyword (@url): then `url(` opens a plain block. */
+const NOT_BEFORE_URL = /[\w\\#@-]|[^\x00-\x7F]/;
+
+/**
+ * True when the `(` at `i` opens a url token, as CSS reads it: it follows the name `url`, in any
+ * ASCII case, and no quote follows it after whitespace (`url("...")` is a function holding a
+ * string). `escaped` is the offset of the last escaped character, which belongs to a name.
+ */
+function opensUrl(style: string, i: number, escaped: number): boolean {
+  if (i < 3 || !/^url$/i.test(style.slice(i - 3, i))) return false;
+  if (i > 3 && (i - 4 === escaped || NOT_BEFORE_URL.test(style[i - 4]!))) return false;
+  let j = i + 1;
+  while (j < style.length && CSS_SPACE_CHARACTERS.includes(style[j]!)) j++;
+  return style[j] !== '"' && style[j] !== "'";
+}
 
 /**
  * The declarations of an inline style, split the way CSS splits them: a `;` ends a declaration
- * only outside quotes, comments and (), [] or {} blocks, and a comment counts as a space. A
- * declaration is `clean`, so that it may show content again, unless it or one before it holds
- * something this split cannot place the way CSS does, after which CSS may split elsewhere: a
- * backslash (escapes are not decoded), a line break inside a quoted string (CSS ends the string
- * there), a closing bracket that closes no block, or an unquoted url() holding a quote, a bracket,
- * a comment or a backslash (CSS reads it as one token, up to the first `)`).
+ * only outside quotes, comments, url tokens and (), [] or {} blocks, and a comment counts as a
+ * space. An unquoted url() is one token up to its first `)` not escaped, whatever it holds (a
+ * quote, a bracket, a comment opener), as CSS reads it, and a `)` or `]` that closes no block is a
+ * plain character. A declaration is `clean`, so that it may show content again, unless it or one
+ * before it holds something this split cannot place the way CSS does, after which CSS may split
+ * elsewhere: a backslash (escapes are not decoded), a line break inside a quoted string (CSS ends
+ * the string there), a closing bracket that does not match the innermost open block, a `}` that
+ * closes none, or an `@` starting a declaration (an at-rule, which CSS may end at its {} block).
  */
 function strictPieces(style: string): StrictPiece[] {
   const out: StrictPiece[] = [];
   const closers: string[] = [];
   let at = 0; // where the current declaration starts
+  let first = -1; // where its first character other than whitespace or a comment is, once met
   let from = 0; // where its text not yet copied into `copied` starts
   let copied = ""; // its text before `from`, each comment replaced by a space
   let quote = "";
   let lost = false;
-  const end = (stop: number): void => {
-    out.push({ at, text: copied + style.slice(from, stop), clean: !lost });
-    at = from = stop + 1;
-    copied = "";
-  };
+  let escaped = -1; // the offset of the last escaped character
   for (let i = 0; i < style.length; i++) {
     const c = style[i]!;
-    if (c === "\\") {
-      lost = true;
-      i++; // the escaped character is never structural
-    } else if (quote) {
-      if (c === quote) quote = "";
+    if (quote) {
+      if (c === "\\") {
+        lost = true;
+        i++; // the escaped character, a line break included, never ends the string
+      } else if (c === quote) quote = "";
       else if (c === "\n" || c === "\r" || c === "\f") {
         quote = "";
         lost = true;
       }
-    } else if (c === "/" && style[i + 1] === "*") {
+      continue;
+    }
+    if (c === "/" && style[i + 1] === "*") {
       const close = style.indexOf("*/", i + 2);
       copied += style.slice(from, i) + " ";
       i = close < 0 ? style.length : close + 1;
       from = i + 1;
+      continue;
+    }
+    if (first < 0 && !CSS_SPACE_CHARACTERS.includes(c)) {
+      first = i;
+      if (c === "@") lost = true;
+    }
+    if (c === "\\") {
+      lost = true;
+      escaped = ++i; // the escaped character is never structural
     } else if (c === ";") {
-      if (closers.length === 0) end(i);
+      if (closers.length > 0) continue;
+      out.push({ at, first: first < 0 ? i : first, text: copied + style.slice(from, i), clean: !lost });
+      at = from = i + 1;
+      first = -1;
+      copied = "";
     } else if (c === '"' || c === "'") {
       quote = c;
-    } else if (c === "(" || c === "[" || c === "{") {
-      closers.push(OPENERS[c]!);
-      if (c === "(" && !lost && /url$/i.test(style.slice(Math.max(0, i - 3), i))) {
-        let j = i + 1;
-        while (j < style.length && " \t\n\r\f".includes(style[j]!)) j++;
-        if (style[j] !== '"' && style[j] !== "'") {
-          const close = style.indexOf(")", j);
-          if (URL_TROUBLE.test(style.slice(j, close < 0 ? style.length : close))) lost = true;
+    } else if (c === "(" && opensUrl(style, i, escaped)) {
+      let j = i + 1;
+      for (; j < style.length && style[j] !== ")"; j++) {
+        if (style[j] === "\\") {
+          lost = true;
+          j++;
         }
       }
+      i = j; // the `)` that ends the url token, or the end
+    } else if (c === "(" || c === "[" || c === "{") {
+      closers.push(OPENERS[c]!);
     } else if (c === ")" || c === "]" || c === "}") {
       if (closers.at(-1) === c) closers.pop();
-      else lost = true;
+      else if (closers.length > 0 || c === "}") lost = true;
     }
   }
-  end(style.length);
+  out.push({ at, first: first < 0 ? style.length : first, text: copied + style.slice(from), clean: !lost });
   return out;
 }
-
-/** The properties whose declarations can hide content; the others are not read. */
-const STYLE_PROPERTIES = new Set(["display", "visibility", "opacity", "height", "max-height", "overflow", "overflow-x", "overflow-y", "font-size", "font", "all"]);
 
 /** A CSS escape: a backslash and 1 to 6 hex digits with one optional whitespace, or a backslash and any other character. */
 const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([\s\S])|$)/g;
 const REPLACEMENT_CHARACTER = String.fromCharCode(0xfffd);
+/** A character that reads the same in a name escaped or not: an ASCII letter, digit, `-` or `_`, or anything outside ASCII. */
+const NAME_CHARACTER = /^(?:[\w-]|[^\x00-\x7F])/;
 
-/** `text` with its CSS escapes decoded, as CSS decodes them in a name or a keyword. */
+/**
+ * `text` with its CSS escapes decoded, as CSS decodes them in a name or a keyword. An escaped
+ * character always belongs to a name, so one that could otherwise end it (an escaped colon,
+ * semicolon, space, quote or line break) becomes U+FFFD, as do zero, a surrogate, a code point
+ * beyond U+10FFFF and a backslash at the end: `display\3a none` is no declaration, as in CSS.
+ */
 function decodeEscapes(text: string): string {
   if (!text.includes("\\")) return text;
   return text.replace(CSS_ESCAPE, (_, hex: string | undefined, other: string | undefined) => {
-    if (hex === undefined) return other ?? REPLACEMENT_CHARACTER;
+    if (hex === undefined) return other !== undefined && NAME_CHARACTER.test(other) ? other : REPLACEMENT_CHARACTER;
     const code = Number.parseInt(hex, 16);
-    return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? REPLACEMENT_CHARACTER : String.fromCodePoint(code);
+    if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return REPLACEMENT_CHARACTER;
+    const character = String.fromCodePoint(code);
+    return NAME_CHARACTER.test(character) ? character : REPLACEMENT_CHARACTER;
   });
 }
 
-/** Where the colon of a declaration is: the first one not escaped by a backslash, or -1. */
-function colonIndex(text: string): number {
-  if (!text.includes("\\")) return text.indexOf(":");
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\\") i++; // an escaped character, never the colon
-    else if (text[i] === ":") return i;
-  }
-  return -1;
+/** Whether a UTF-16 code unit is whitespace to JavaScript (`\s`): ASCII whitespace, the vertical tab, or a Unicode space. */
+function isSpace(code: number): boolean {
+  if (code < 0x80) return code === 0x20 || (code >= 0x09 && code <= 0x0d);
+  return (
+    code === 0xa0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  );
 }
 
 /**
- * A piece read loosely, for hiding: CSS escapes decoded (`d\69 splay:\6e one` is `display:none`
- * to a browser too), any whitespace trimmed and collapsed, any case folded.
+ * For a style holding a comment opener: from each offset, where the next comment opener, the next
+ * comment closer, the next `;`, `{` or `}`, and the next character that is neither whitespace nor
+ * in a comment starting there or later are (the length when there is none). Read from any offset,
+ * a comment ends at the first closer after its opener.
  */
-function looseDeclaration(text: string): Declaration | undefined {
-  const colon = colonIndex(text);
-  if (colon < 0) return undefined;
-  const property = decodeEscapes(text.slice(0, colon)).trim().toLowerCase();
-  if (!STYLE_PROPERTIES.has(property)) return undefined;
-  let value = decodeEscapes(text.slice(colon + 1)).replace(/\s+/g, " ").trim().toLowerCase();
+interface CommentMaps {
+  open: Int32Array;
+  close: Int32Array;
+  delimiter: Int32Array;
+  next: Int32Array;
+}
+
+function commentMaps(text: string): CommentMaps {
+  const n = text.length;
+  const map = (): Int32Array => new Int32Array(n + 2).fill(n);
+  const maps = { open: map(), close: map(), delimiter: map(), next: map() };
+  const { open, close, delimiter, next } = maps;
+  for (let p = n - 1; p >= 0; p--) {
+    const c = text.charCodeAt(p);
+    const d = text.charCodeAt(p + 1);
+    open[p] = c === 0x2f && d === 0x2a ? p : open[p + 1]!;
+    close[p] = c === 0x2a && d === 0x2f ? p : close[p + 1]!;
+    delimiter[p] = c === 0x3b || c === 0x7b || c === 0x7d ? p : delimiter[p + 1]!;
+    if (isSpace(c)) next[p] = next[p + 1]!;
+    else if (open[p] === p) next[p] = close[p + 2]! < n ? next[close[p + 2]! + 2]! : n;
+    else next[p] = p;
+  }
+  return maps;
+}
+
+/** A property that can hide content, by name, in any ASCII case; scanDeclarations checks that no name character comes before it. */
+const HIDING_NAME = /display|visibility|opacity|max-height|height|max-width|width|overflow-[xy]|overflow|font-size|font|transform|scale|zoom|all/gi;
+/** What ends a value for the scan. */
+const VALUE_END = /[;{}]/g;
+/**
+ * In a style holding a comment, where two values the scan reads can overlap, the most characters
+ * and the most comments it reads in one: past either, the value counts as hiding.
+ */
+const SCANNED_VALUE_MAX = 512;
+const SCANNED_COMMENTS_MAX = 32;
+/** Properties whose value, cut short inside a function by another declaration found there, counts as hiding. The others hide on a function anyway, or never. */
+const CUT_HIDES = new Set(["font", "transform", "scale"]);
+
+/** Whether a UTF-16 code unit continues a CSS name: an ASCII letter, digit, `-` or `_`, or anything outside ASCII. */
+function isNameCode(code: number): boolean {
+  return code >= 0x80 || code === 0x2d || code === 0x5f || (code >= 0x30 && code <= 0x39) || ((code | 0x20) >= 0x61 && (code | 0x20) <= 0x7a);
+}
+
+/** Where the first of `found` (in order) at or after `p` starts, or `none`. */
+function firstFrom(found: { at: number }[], p: number, none: number): number {
+  let low = 0;
+  let high = found.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (found[middle]!.at < p) low = middle + 1;
+    else high = middle;
+  }
+  return found[low]?.at ?? none;
+}
+
+/**
+ * Every declaration of a property that can hide content, found by its name (see above). Each value
+ * runs to the next `;`, `{` or `}`, or the end, with its comments removed (a comment left open
+ * runs to the end), and stops at the next declaration found in it. In a valid hiding value,
+ * another declaration can only stand inside a function or a quoted string, after what makes it
+ * hide; so the values read do not overlap, and a font, transform or scale value cut short inside a
+ * function counts as hiding. In a style holding a comment, values read from inside a comment can
+ * overlap others: a value longer than SCANNED_VALUE_MAX, or holding more than SCANNED_COMMENTS_MAX
+ * comments, counts as hiding. Linear time.
+ */
+function scanDeclarations(style: string): ScannedDeclaration[] {
+  const text = decodeEscapes(style);
+  const n = text.length;
+  const maps = text.includes("/*") ? commentMaps(text) : undefined;
+  const plain = !maps && text === style; // offsets in `text` are offsets in the style
+  const found: ScannedDeclaration[] = [];
+  const colons: number[] = [];
+  HIDING_NAME.lastIndex = 0;
+  for (let m = HIDING_NAME.exec(text); m; m = HIDING_NAME.exec(text)) {
+    const at = m.index;
+    if (at > 0 && isNameCode(text.charCodeAt(at - 1))) continue; // the end of a longer name
+    let colon = at + m[0].length;
+    if (maps) colon = maps.next[colon]!;
+    else while (colon < n && isSpace(text.charCodeAt(colon))) colon++;
+    if (text[colon] !== ":") continue;
+    found.push({ at, end: -1, property: m[0].toLowerCase(), value: "", failClosed: false });
+    colons.push(colon);
+  }
+  let end = 0; // without comments: the first `;`, `{` or `}` after the colon last read
+  for (let k = 0; k < found.length; k++) {
+    const declaration = found[k]!;
+    const colon = colons[k]!;
+    let cut = false;
+    if (!maps) {
+      if (end <= colon) {
+        VALUE_END.lastIndex = colon + 1;
+        end = VALUE_END.exec(text)?.index ?? n;
+      }
+      const next = found[k + 1]?.at ?? n;
+      cut = next < end;
+      declaration.value = text.slice(colon + 1, Math.min(next, end));
+      if (plain) declaration.end = Math.min(next, end);
+    } else {
+      const parts: string[] = [];
+      let length = 0;
+      for (let p = colon + 1, comments = 0; ; comments++) {
+        const open = maps.open[p]!;
+        const next = firstFrom(found, p, n);
+        const stop = Math.min(open, maps.delimiter[p]!, next);
+        length += stop - p;
+        if (length > SCANNED_VALUE_MAX || comments > SCANNED_COMMENTS_MAX) {
+          declaration.failClosed = true;
+          break;
+        }
+        parts.push(text.slice(p, stop));
+        if (stop === n || stop !== open) {
+          cut = stop === next && stop < n;
+          break;
+        }
+        const close = maps.close[open + 2]!;
+        if (close >= n) break; // a comment left open runs to the end
+        parts.push(" ");
+        p = close + 2;
+      }
+      declaration.value = parts.join("");
+    }
+    if (cut && CUT_HIDES.has(declaration.property) && declaration.value.includes("(")) declaration.failClosed = true;
+  }
+  return found;
+}
+
+/** A declaration read loosely, for hiding: any whitespace trimmed and collapsed, any case folded. */
+function looseValue(property: string, text: string): Declaration {
+  let value = text.replace(/\s+/g, " ").trim().toLowerCase();
   const important = /! ?important$/.test(value);
   if (important) value = value.replace(/ ?! ?important$/, "");
   return { property, value, important };
 }
 
-/** ASCII whitespace, the only whitespace CSS knows. */
+/** A declaration of the CSS split read loosely, for hiding, its CSS escapes decoded: `d\69 splay:\6e one` is `display:none` to a browser too. */
+function looseDeclaration(text: string): Declaration | undefined {
+  const decoded = decodeEscapes(text);
+  const colon = decoded.indexOf(":");
+  if (colon < 0) return undefined;
+  const property = decoded.slice(0, colon).trim().toLowerCase();
+  return STYLE_PROPERTIES.has(property) ? looseValue(property, decoded.slice(colon + 1)) : undefined;
+}
+
+/** ASCII whitespace runs. */
 const CSS_SPACE = /[ \t\n\r\f]+/g;
 const NOT_ASCII = /[^\x00-\x7F]/;
 /** Where a loose and a strict reading may differ: outside ASCII, or a vertical tab (whitespace to JS, not to CSS). */
@@ -317,10 +501,10 @@ function cssCollapse(text: string): string {
 const QUOTED = /"[^"]*"?|'[^']*'?/g;
 
 /**
- * A piece read as CSS reads it, for showing again: undefined when it holds a backslash or a
- * character outside ASCII (in the font shorthand, a quoted family name may hold any character: a
- * quoted string is opaque); otherwise only ASCII whitespace trimmed and collapsed, only ASCII case
- * folded. The piece comes from strictPieces, clean, so none of its strings holds a line break.
+ * A declaration of the CSS split read as CSS reads it, for showing again: undefined when it holds
+ * a backslash or a character outside ASCII (in the font shorthand, a quoted family name may hold
+ * any character: a quoted string is opaque); otherwise only ASCII whitespace trimmed and collapsed,
+ * only ASCII case folded. The declaration is clean, so none of its strings holds a line break.
  */
 function strictDeclaration(text: string): Declaration | undefined {
   const colon = text.indexOf(":");
@@ -358,6 +542,26 @@ const ABSOLUTE_LENGTH = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|pc|in|cm|mm|q|rem|vw|v
 const ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?(?:[a-z]+|%)?$/;
 /** A number as loosely as anything may write it, for opacity: zero or below hides. */
 const LOOSE_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?%?$/;
+/** A size as loosely as anything may write it, its unit (letters, or %) captured. */
+const LOOSE_SIZE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?([a-z]*|%)$/;
+/**
+ * Font sizes too small to read, by unit: below 1px, 1pt (in the other absolute units too), 10%, a
+ * tenth of an em (a fifth of an ex or ch), and a tenth of any other unit. A number alone is a size
+ * in px to an old browser.
+ */
+const TOO_SMALL = new Map<string, number>([
+  ["", 1],
+  ["px", 1],
+  ["pt", 1],
+  ["pc", 1 / 12],
+  ["in", 1 / 72],
+  ["cm", 2.54 / 72],
+  ["mm", 25.4 / 72],
+  ["q", 101.6 / 72],
+  ["%", 10],
+  ["ex", 0.2],
+  ["ch", 0.2],
+]);
 /** An angle, in any unit. */
 const ANGLE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:deg|grad|rad|turn)$/;
 /** An oblique angle as the font shorthand takes it, plainly written; its value must be within ±90deg. */
@@ -388,9 +592,31 @@ const RESERVED_FAMILY = new Set(["inherit", "initial", "unset", "default", "reve
 const GENERIC_FAMILY = new Set(
   "serif sans-serif cursive fantasy monospace system-ui math emoji fangsong ui-serif ui-sans-serif ui-monospace ui-rounded -webkit-body -webkit-pictograph".split(" "),
 );
+/** A scaling transform function, with its arguments up to the first `)`. */
+const SCALING = /\b(scale(?:x|y|3d)?|matrix(?:3d)?)\(([^)]*)/g;
+/** Functions known only at render time, which can carry any transform. */
+const CARRIER = /\b(?:var|env|attr)\(/;
 
 const isFunction = (v: string): boolean => v.includes("(");
 const positive = (v: string): boolean => Number.parseFloat(v) > 0;
+
+/** Whether a size, loosely written, is zero or too small to read (see TOO_SMALL). */
+function tooSmall(v: string): boolean {
+  if (ZERO.test(v)) return true;
+  const unit = LOOSE_SIZE.exec(v)?.[1];
+  return unit !== undefined && Math.abs(Number.parseFloat(v)) < (TOO_SMALL.get(unit) ?? 0.1);
+}
+
+/** A scale factor: a number or a percentage; zero in any unit; 1 for anything else, which CSS rejects, ignoring the whole value. */
+function factor(t: string): number {
+  if (LOOSE_NUMBER.test(t)) return Number.parseFloat(t) / (t.endsWith("%") ? 100 : 1);
+  return ZERO.test(t) ? 0 : 1;
+}
+
+/** Whether scale factors leave less than a tenth of the content on an axis, or a hundredth of its area; NaN counts as shrinking. */
+function shrinks(x: number, y: number, area = x * y): boolean {
+  return !(Math.abs(x) >= 0.1 && Math.abs(y) >= 0.1 && Math.abs(area) >= 0.01);
+}
 
 function display(v: string): Effect {
   if (DISPLAY_HIDE.has(v) || isFunction(v)) return "hide";
@@ -409,14 +635,14 @@ function opacity(v: string): Effect {
   return undefined;
 }
 
-/** A height or max-height: "hide" when zero. `open` is the keyword that lifts the limit: auto or none. */
-function height(v: string, open: string): Effect {
+/** A height, width, max-height or max-width: "hide" when zero. `open` is the keyword that lifts the limit: auto or none. */
+function extent(v: string, open: string): Effect {
   if (isFunction(v) || ZERO.test(v)) return "hide";
   if (v === open || GLOBAL_SHOW.test(v) || (PLAIN_LENGTH.test(v) && positive(v))) return "show";
   return undefined;
 }
 
-/** An overflow value: "hide" when it clips (a scrolling box of no height shows nothing either). */
+/** An overflow value: "hide" when it clips (a scrolling box of no size shows nothing either). */
 function overflow(v: string, max: number): Effect {
   if (isFunction(v)) return "hide";
   if (GLOBAL_SHOW.test(v)) return "show";
@@ -425,9 +651,55 @@ function overflow(v: string, max: number): Effect {
   return tokens.every((t) => t === "visible") ? "show" : "hide";
 }
 
+/**
+ * A transform: "hide" when its scales (scale, scaleX, scaleY, scale3d) and matrices, multiplied
+ * together, leave less than a tenth of the content on an axis or a hundredth of its area; when one
+ * of their arguments is a function; or when var(), env() or attr() could carry such a scale. Only
+ * `none` shows the content again.
+ */
+function transform(v: string): Effect {
+  if (v === "none") return "show";
+  if (CARRIER.test(v)) return "hide";
+  let x = 1;
+  let y = 1;
+  let area = 1;
+  for (const [, name, args = ""] of v.matchAll(SCALING)) {
+    if (isFunction(args)) return "hide";
+    const a = args.split(",").map((t) => factor(t.trim()));
+    if (name === "matrix" || name === "matrix3d") {
+      // Where the x and y axes go: (a, b) and (c, d) in matrix(), (m11, m12) and (m21, m22) in matrix3d().
+      const [m11 = 1, m12 = 0, m21 = 0, m22 = 1] = name === "matrix" ? a : [a[0], a[1], a[4], a[5]];
+      x *= Math.hypot(m11, m12);
+      y *= Math.hypot(m21, m22);
+      area *= m11 * m22 - m12 * m21;
+    } else {
+      const sx = name === "scaley" ? 1 : (a[0] ?? 1);
+      const sy = name === "scalex" ? 1 : name === "scaley" ? (a[0] ?? 1) : (a[1] ?? (name === "scale" ? sx : 1));
+      x *= sx;
+      y *= sy;
+      area *= sx * sy;
+    }
+  }
+  return shrinks(x, y, area) ? "hide" : undefined;
+}
+
+/** The scale property: "hide" when it leaves less than a tenth of the content on an axis, or holds a function. Only `none` shows it again. */
+function scale(v: string): Effect {
+  if (v === "none") return "show";
+  if (isFunction(v)) return "hide";
+  const [x = 1, y = x] = v.split(" ").map(factor);
+  return shrinks(x, y) ? "hide" : undefined;
+}
+
+/** Zoom: "hide" below a tenth (zero too, fail closed) or on a function; only normal, 1 and 100% show the content again. */
+function zoom(v: string): Effect {
+  if (v === "normal" || v === "1" || v === "100%") return "show";
+  return isFunction(v) || Math.abs(factor(v)) < 0.1 ? "hide" : undefined;
+}
+
 function fontSize(v: string): Size {
   if (isFunction(v)) return "function";
-  if (ZERO.test(v)) return "zero";
+  if (tooSmall(v)) return "zero";
   if (INHERIT.test(v)) return "inherit";
   if (ABSOLUTE_SIZE.test(v) || (ABSOLUTE_LENGTH.test(v) && positive(v))) return "reset";
   if (v === "smaller" || v === "larger" || (PLAIN_LENGTH.test(v) && positive(v))) return "relative";
@@ -436,7 +708,9 @@ function fontSize(v: string): Size {
 
 /**
  * The tokens of a value at its top level: words, a quoted string or a function with its arguments
- * as one token, and each `/` and `,` a token of its own. `v` has its whitespace collapsed to spaces.
+ * as one token, and each `/` and `,` a token of its own. A quoted string is a token of its own even
+ * with nothing between it and a word, as in CSS: `0'a'` is `0` and `'a'`. `v` has its whitespace
+ * collapsed to spaces.
  */
 function valueTokens(v: string): string[] {
   const out: string[] = [];
@@ -449,9 +723,18 @@ function valueTokens(v: string): string[] {
   };
   for (const c of v) {
     if (quote) {
-      if (c === quote) quote = "";
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === "(") depth++;
+      if (c === quote) {
+        quote = "";
+        if (depth === 0) {
+          current += c;
+          flush();
+          continue;
+        }
+      }
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      if (depth === 0) flush();
+    } else if (c === "(") depth++;
     else if (c === ")" && depth > 0) depth--;
     else if (depth === 0 && c === " ") {
       flush();
@@ -492,18 +775,18 @@ function familyList(tokens: string[]): boolean {
 }
 
 /**
- * The size the `font` shorthand sets. A plain token that reads as zero, other than an angle or a
- * line height, makes it a zero size, wherever it stands (a valid shorthand has no other such
- * token). Otherwise, with a function anywhere, it is a function size. Otherwise it counts only when
- * it parses strictly: style, variant, weight and stretch keywords, each at most once, or `normal`,
- * four at most (`oblique` may take an angle within ±90deg); the size; an optional /line-height
- * (`normal`, or a plain number, length or percentage); then the family list.
+ * The size the `font` shorthand sets. A plain token that reads as zero or too small a size, other
+ * than an angle or a line height, makes it a zero size, wherever it stands (a valid shorthand has
+ * no other such token). Otherwise, with a function anywhere, it is a function size. Otherwise it
+ * counts only when it parses strictly: style, variant, weight and stretch keywords, each at most
+ * once, or `normal`, four at most (`oblique` may take an angle within ±90deg); the size; an
+ * optional /line-height (`normal`, or a plain number, length or percentage); then the family list.
  */
 function fontShorthand(v: string): Size {
   if (INHERIT.test(v)) return "inherit";
   if (v === "initial" || SYSTEM_FONT.test(v)) return "reset";
   const tokens = valueTokens(v);
-  const zero = tokens.some((t, k) => tokens[k - 1] !== "/" && !isFunction(t) && ZERO.test(t) && !ANGLE.test(t));
+  const zero = tokens.some((t, k) => tokens[k - 1] !== "/" && !isFunction(t) && tooSmall(t) && !ANGLE.test(t));
   if (zero) return "zero";
   if (isFunction(v)) return "function";
   const seen = new Set<string>();
@@ -535,7 +818,7 @@ function fontShorthand(v: string): Size {
 
 /** What an element's inline style does to it. */
 interface StyleEffect {
-  /** Not shown at all, nor anything in it: display, opacity, or a zero height with clipping overflow. */
+  /** Not shown at all, nor anything in it: display, opacity, a transform, scale or zoom, or a zero size with clipping overflow. */
   hidden: boolean;
   visibility: Effect;
   fontSize: Size;
@@ -543,65 +826,98 @@ interface StyleEffect {
 
 const NO_STYLE: StyleEffect = { hidden: false, visibility: undefined, fontSize: undefined };
 
+/** Properties that hide an element on their own; that clip its overflow; that give it no size, with clipping overflow. */
+const HIDING_KEYS = ["display", "opacity", "transform", "scale", "zoom"];
+const CLIPPING_KEYS = ["overflow", "overflow-x", "overflow-y"];
+const EXTENT_KEYS = ["height", "max-height", "width", "max-width"];
+
+/** The effect that wins for each property (font-size for the font shorthand too), and whether it was `!important`. */
+type Winners = Map<string, { effect: string; important: boolean }>;
+
+/** Whether any of `keys` hides. */
+function hides(winners: Winners, keys: string[]): boolean {
+  return keys.some((key) => winners.get(key)?.effect === "hide");
+}
+
+/** Record an effect, unless an `!important` one wins, or it may not apply: only a clean declaration shows content again. */
+function setEffect(winners: Winners, key: string, effect: string | undefined, important: boolean, clean: boolean): void {
+  if (effect === undefined || (!clean && SHOWS.has(effect))) return;
+  const current = winners.get(key);
+  if (current?.important && !important) return;
+  // A function size never undoes a zero size; nothing that follows the parent undoes hiding unless clean.
+  if (current && HIDES.has(current.effect) && FOLLOWS.has(effect) && (!clean || effect === "function")) return;
+  winners.set(key, { effect, important });
+}
+
+/** Record what a declaration does. */
+function applyDeclaration(winners: Winners, d: Declaration | undefined, clean: boolean): void {
+  if (!d) return;
+  const { property: p, value: v, important } = d;
+  if (p === "display") setEffect(winners, p, display(v), important, clean);
+  else if (p === "visibility") setEffect(winners, p, visibility(v), important, clean);
+  else if (p === "opacity") setEffect(winners, p, opacity(v), important, clean);
+  else if (p === "height" || p === "width") setEffect(winners, p, extent(v, "auto"), important, clean);
+  else if (p === "max-height" || p === "max-width") setEffect(winners, p, extent(v, "none"), important, clean);
+  else if (p === "overflow") setEffect(winners, p, overflow(v, 2), important, clean);
+  else if (p === "overflow-x" || p === "overflow-y") setEffect(winners, p, overflow(v, 1), important, clean);
+  else if (p === "transform") setEffect(winners, p, transform(v), important, clean);
+  else if (p === "scale") setEffect(winners, p, scale(v), important, clean);
+  else if (p === "zoom") setEffect(winners, p, zoom(v), important, clean);
+  else if (p === "font-size") setEffect(winners, "font-size", fontSize(v), important, clean);
+  else if (p === "font") setEffect(winners, "font-size", fontShorthand(v), important, clean);
+  else if (p === "all" && INHERIT.test(v)) {
+    setEffect(winners, "font-size", "inherit", important, clean);
+    setEffect(winners, "visibility", "inherit", important, clean);
+  }
+}
+
 /**
  * Read an inline style fail closed (see above), with `!important` winning over a later
- * declaration. The pieces of both splits are taken in the order they start (a naive piece first
- * when both start at the same place). Each is read loosely for what can hide; only a clean
- * declaration of the CSS split, read as CSS reads it, can show content again. A size or visibility
- * that follows the parent counts from any piece, except over a hiding one, which only a clean
- * declaration may override.
+ * declaration. The declarations of the CSS split and those found by name are taken in the order
+ * they start; one found by name is placed where its name stands in the style with its escapes
+ * decoded, which is where it stands in the style up to the first backslash: past it, no
+ * declaration of the split is clean, so only effects that cannot show content again are left to
+ * order. Each declaration is read loosely for what can hide; only a clean declaration of the CSS
+ * split, read as CSS reads it, can show content again. A size or visibility that follows the
+ * parent counts from any declaration, except over a hiding one, which only a clean declaration may
+ * override. A declaration found by name that spans exactly a declaration of the split, in a style
+ * without comments or escapes, reads the same as it: it is not read twice.
  */
 function styleEffect(style: unknown): StyleEffect {
   if (typeof style !== "string" || !style) return NO_STYLE;
-  const winners = new Map<string, { effect: string; important: boolean }>();
-  const set = (key: string, effect: string | undefined, important: boolean, clean: boolean): void => {
-    if (effect === undefined || (!clean && SHOWS.has(effect))) return;
-    const current = winners.get(key);
-    if (current?.important && !important) return;
-    // A function size never undoes a zero size; nothing that follows the parent undoes hiding unless clean.
-    if (current && HIDES.has(current.effect) && FOLLOWS.has(effect) && (!clean || effect === "function")) return;
-    winners.set(key, { effect, important });
-  };
-  const apply = (d: Declaration | undefined, clean: boolean): void => {
-    if (!d) return;
-    const { property: p, value: v, important } = d;
-    if (p === "display") set(p, display(v), important, clean);
-    else if (p === "visibility") set(p, visibility(v), important, clean);
-    else if (p === "opacity") set(p, opacity(v), important, clean);
-    else if (p === "height") set(p, height(v, "auto"), important, clean);
-    else if (p === "max-height") set(p, height(v, "none"), important, clean);
-    else if (p === "overflow") set(p, overflow(v, 2), important, clean);
-    else if (p === "overflow-x" || p === "overflow-y") set(p, overflow(v, 1), important, clean);
-    else if (p === "font-size") set("font-size", fontSize(v), important, clean);
-    else if (p === "font") set("font-size", fontShorthand(v), important, clean);
-    else if (p === "all" && INHERIT.test(v)) {
-      set("font-size", "inherit", important, clean);
-      set("visibility", "inherit", important, clean);
-    }
-  };
-  const naive = naivePieces(style);
+  const winners: Winners = new Map();
   const strict = strictPieces(style);
-  for (let n = 0, s = 0; n < naive.length || s < strict.length; ) {
-    const a = naive[n];
-    const b = strict[s];
-    if (a && (!b || a.at < b.at || (a.at === b.at && a.text !== b.text))) {
-      apply(looseDeclaration(a.text), false);
-      n++;
-    } else if (a && b && a.at === b.at) {
-      n++; // the same text as the declaration of the CSS split: read once, below
-    } else if (b) {
+  const scanned = scanDeclarations(style);
+  let last = -1; // where the last declaration of the split read ends
+  let first = -1; // and where its first character other than whitespace is
+  for (let s = 0, k = 0; s < strict.length || k < scanned.length; ) {
+    const piece = strict[s];
+    const found = scanned[k];
+    if (piece && (!found || piece.at <= found.at)) {
       // A clean plain-ASCII declaration reads the same loosely and strictly: read it once.
-      if (!b.clean || LOOSE_DIFFERS.test(b.text)) apply(looseDeclaration(b.text), false);
-      if (b.clean) apply(strictDeclaration(b.text), true);
+      const plain = !LOOSE_DIFFERS.test(piece.text);
+      if (!piece.clean || !plain) applyDeclaration(winners, looseDeclaration(piece.text), false);
+      if (piece.clean) applyDeclaration(winners, strictDeclaration(piece.text), true);
+      last = piece.at + piece.text.length;
+      first = piece.first;
       s++;
+    } else if (found) {
+      const { property } = found;
+      if (found.failClosed) {
+        // Its value was not read in full: it hides, as !important (nothing to do for `all`).
+        const font = property === "font" || property === "font-size";
+        setEffect(winners, font ? "font-size" : property, font ? "zero" : "hide", true, false);
+      } else if (found.end < 0 || found.end !== last || found.at !== first) {
+        // Unless it is that declaration, already read: then it reads the same, loosely or strictly.
+        applyDeclaration(winners, looseValue(property, found.value), false);
+      }
+      k++;
     }
   }
-  const effect = (key: string): string | undefined => winners.get(key)?.effect;
-  const clipped = ["overflow", "overflow-x", "overflow-y"].some((k) => effect(k) === "hide");
   return {
-    hidden: effect("display") === "hide" || effect("opacity") === "hide" || (clipped && (effect("height") === "hide" || effect("max-height") === "hide")),
-    visibility: effect("visibility") as Effect,
-    fontSize: effect("font-size") as Size,
+    hidden: hides(winners, HIDING_KEYS) || (hides(winners, CLIPPING_KEYS) && hides(winners, EXTENT_KEYS)),
+    visibility: winners.get("visibility")?.effect as Effect,
+    fontSize: winners.get("font-size")?.effect as Size,
   };
 }
 

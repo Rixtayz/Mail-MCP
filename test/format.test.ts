@@ -396,6 +396,162 @@ describe("bodyToText reads a quoted font name outside ASCII as a size reset (R16
   });
 });
 
+describe("bodyToText finds a hiding declaration by its property's name, whatever surrounds it (R17)", () => {
+  // In attributes below, &quot; is a double quote and &#39; a single quote.
+  it.each([
+    // After a url() the CSS split could not follow, a comment holding a semicolon before the value.
+    ["a comment holding a semicolon after a url() holding a parenthesis", "background:url(a(b);/*;*/display:none"],
+    ["a comment holding a semicolon after a url() holding a bracket", "background:url(a[b);/*;*/display:none"],
+    ["a comment holding a semicolon after a url() holding a brace", "background:url(a{b);/*;*/display:none"],
+    ["a comment holding a semicolon after a url() holding a double quote", "background:url(a&quot;b);/*;*/display:none"],
+    ["a comment holding a semicolon after a url() holding a quote", "background:url(a&#39;b);/*;*/display:none"],
+    ["a comment holding a semicolon after a url() holding a comment opener", "background:url(/*);/*;*/display:none"],
+    ["a comment with spaces around its semicolon after a url()", "background:url(a&quot;b);/* ; */ display : none"],
+    ["a comment holding a semicolon between the colon and none", "background:url(a(b);display:/*;*/none"],
+    ["a comment holding a semicolon between the property and the colon", "background:url(a(b);display/*;*/:none"],
+    ["a comment holding a semicolon before a zero opacity", "background:url(a(b);opacity:/*;*/0"],
+    ["a comment holding a semicolon before a zero font size", "background:url(a(b);font-size:/*;*/0"],
+    ["a comment holding a semicolon before visibility:hidden", "background:url(a(b);visibility:/*;*/hidden"],
+    ["a comment holding a semicolon before overflow:hidden of a zero height", "background:url(a(b);height:0;overflow:/*;*/hidden"],
+    ["a comment holding a semicolon after an escaped url()", "x:\\75rl(a(b);/*;*/display:none"],
+    ["a comment holding a semicolon after a url() holding a space", "x:url(a b(c);/*;*/display:none"],
+    ["display:none !important behind a comment, then display:block", "background:url(a(b);display:/*;*/none !important;display:block"],
+    ["a comment holding a semicolon after a ] that closes no block", "x:(]);/*;*/display:none"],
+    // An at-rule ends at its {} block, without a semicolon.
+    ["display:none after an empty at-rule", "@x{}display:none"],
+    ["display:none after an at-rule with spaces", "@x {} display:none"],
+    ["display:none after an at-rule whose block holds a semicolon", "@x{;}display:none"],
+    ["display:none after an at-rule whose prelude holds a semicolon", "@x(;){}display:none"],
+    ["display:none after an at-rule and a comment", "@x{}/**/display:none"],
+    ["display:none after a media rule holding display:block", "@media x{display:block}display:none"],
+    ["display:none after a media rule with a condition", "@media(min-width:0){}display:none"],
+    ["display:none after two at-rules", "@x{}@y{}display:none"],
+    ["display:none after a vendor at-rule", "@-x{}display:none"],
+    ["display:none after an escaped at-rule", "@\\78{}display:none"],
+    ["opacity:0 after a media rule", "color:red;@media x{}opacity:0"],
+    ["visibility:hidden after an at-rule", "@x{}visibility:hidden"],
+    ["height:0 and overflow:hidden after an at-rule", "@x{}height:0;overflow:hidden"],
+    ["overflow:hidden after an at-rule, with height:0 before it", "height:0;@x{}overflow:hidden"],
+    ["the font:0/0 hack after an at-rule", "@x{}font:0/0 a"],
+    ["font-size:0 after an at-rule", "@x{}font-size:0"],
+    ["display:none !important after an at-rule, then display:block", "@x{}display:none !important;display:block"],
+    // After an at-rule or a } that closes no block, no later declaration shows hidden content again.
+    ["display:none, then display:block after an at-rule", "display:none;@x{}display:block"],
+    ["display:none, then display:block after a } that closes no block", "display:none;x:a};display:block"],
+  ])("drops %s", (_, style) => {
+    expect(html(`<p>Before</p><div style="${style}">SECRET</div><p>After</p>`)).toBe("Before\n\nAfter");
+  });
+
+  it.each([
+    // An unquoted url() is one token up to its first ), as CSS reads it, and a ) or ] that closes no block is a plain character.
+    ["display:block after a url() holding a parenthesis", "display:none;background:url(a(b);display:block"],
+    ["display:block after a url() holding a bracket", "display:none;background:url(a[b);display:block"],
+    ["display:block after a url() holding a quote", "display:none;background:url(a&#39;b);display:block"],
+    ["display:block after a url() holding a comment opener", "display:none;background:url(/*);display:block"],
+    ["display:block after an upper-case URL() with spaces", "display:none;background:URL( a(b );display:block"],
+    ["display:block after a ) that closes no block", "display:none;x:a);display:block"],
+    ["display:block after a ] that closes no block", "display:none;x:a];display:block"],
+  ])("shows hidden content again with %s", (_, style) => {
+    expect(html(`<p>Before</p><div style="${style}">SHOWN</div><p>After</p>`)).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+
+  it.each([
+    // #url( and -url( are not url tokens: their quote opens a string, which holds the rest.
+    ["#url(", "display:none;x:#url(a&#39;b);display:block"],
+    ["-url(", "display:none;x:-url(a&#39;b);display:block"],
+  ])("keeps hidden content hidden after %s, which is no url()", (_, style) => {
+    expect(html(`<p>Before</p><div style="${style}">SECRET</div><p>After</p>`)).toBe("Before\n\nAfter");
+  });
+
+  it.each([
+    ["a background image whose unquoted url() holds parentheses", "background-image:url(https://cdn.example.com/hero(1).png);font-size:16px"],
+    ["a data-URI SVG background", "background:url(&quot;data:image/svg+xml;utf8,<svg xmlns=&#39;http://www.w3.org/2000/svg&#39;></svg>&quot;);font-size:14px"],
+    ["an unquoted base64 data-URI background", "background-image:url(data:image/png;base64,iVBORw0KGgo=);font-size:14px"],
+    ["a quoted url() holding a semicolon", "background:url(&#39;a;b.png&#39;);font-size:14px"],
+    ["an MJML button with a background url()", "background:#414141 url(https://img.example.com/bg.png) center / cover no-repeat;border-radius:3px;font-size:13px;color:#fff"],
+  ])("keeps text sized again after %s inside font-size:0", (_, style) => {
+    expect(html(`<p>Before</p><div style="font-size:0px"><div style="${style}">SHOWN</div></div><p>After</p>`)).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+});
+
+describe("bodyToText drops content shrunk out of sight (R17)", () => {
+  it.each([
+    // A zero width or max-width with overflow that clips, like a zero height.
+    ["width:0 with overflow:hidden", '<div style="width:0;overflow:hidden">SECRET</div>'],
+    ["max-width:0 with overflow:hidden", '<div style="max-width:0px;overflow:hidden">SECRET</div>'],
+    ["width:0 with overflow:clip", '<div style="width:-0;overflow:clip">SECRET</div>'],
+    ["max-width:0 with overflow-x:hidden", '<div style="max-width:0;overflow-x:hidden">SECRET</div>'],
+    ["width:0 and overflow:hidden, then a width that is not plainly valid", '<div style="width:0;overflow:hidden;width:calc(100%)">SECRET</div>'],
+    ["width:0 and overflow:hidden, then width:auto after a no-break space", '<div style="width:0;overflow:hidden;width:&nbsp;auto">SECRET</div>'],
+    // A font size too small to read counts as zero.
+    ["font-size:0.5px", '<span style="font-size:0.5px">SECRET</span>'],
+    ["font-size:0.9pt", '<span style="font-size:0.9pt">SECRET</span>'],
+    ["font-size:0.05em", '<span style="font-size:0.05em">SECRET</span>'],
+    ["font-size:0.09rem", '<span style="font-size:.09rem">SECRET</span>'],
+    ["font-size:5%", '<span style="font-size:5%">SECRET</span>'],
+    ["font-size:1e-3px", '<span style="font-size:1e-3px">SECRET</span>'],
+    ["font-size:14px, then font-size:0.5px", '<span style="font-size:14px;font-size:0.5px">SECRET</span>'],
+    ["a font shorthand of size 0.5px", '<span style="font:0.5px a">SECRET</span>'],
+    // A quoted family right after the size is a token of its own, as in CSS (found by fuzzing; it leaked before R17 too).
+    ["a font shorthand of zero size glued to a quoted family", "<span style=\"font:0'a'\">SECRET</span>"],
+    ["a font shorthand of zero size glued to a double-quoted family", '<span style="font:0&quot;a&quot;">SECRET</span>'],
+    ["a font shorthand of size 0.5px glued to a quoted family", "<span style=\"font:0.5px'a'\">SECRET</span>"],
+    ["a font shorthand of zero size after a style, glued to a quoted family", "<span style=\"font:italic 0'a'\">SECRET</span>"],
+    ["a font shorthand of size 0.05em after a style", '<span style="font:italic 0.05em/1 a">SECRET</span>'],
+    ["font-size:0.5px inside font-size:0", '<td style="font-size:0"><span style="font-size:0.5px">SECRET</span></td>'],
+    // A transform that scales to zero.
+    ...[
+      "scale(0)",
+      "scale(0, 1)",
+      "scale(1,0)",
+      "scaleX(0)",
+      "scaleY(-0)",
+      "scale3d(0,1,1)",
+      "scale(0%)",
+      "scale(.0)",
+      "scale(0e3)",
+      "SCALE(0)",
+      "rotate(45deg) scale(0)",
+      "scale(calc(0))",
+      "var(--t)",
+    ].map((t): [string, string] => [`transform:${t}`, `<div style="transform:${t}">SECRET</div>`]),
+    ["transform:scale(0), then a transform other than none", '<div style="transform:scale(0);transform:rotate(1deg)">SECRET</div>'],
+    ["transform:scale(0), then transform:none after a no-break space", '<div style="transform:scale(0);transform:&nbsp;none">SECRET</div>'],
+    // Beyond R17: a scale that leaves less than a tenth, a degenerate matrix, the scale and zoom properties.
+    ["transform:scale(0.01)", '<div style="transform:scale(0.01)">SECRET</div>'],
+    ["transform:scale(0.5) scale(0.1), which multiply", '<div style="transform:scale(0.5) scale(0.1)">SECRET</div>'],
+    ["transform:matrix(0,0,0,0,0,0)", '<div style="transform:matrix(0,0,0,0,0,0)">SECRET</div>'],
+    ["transform:matrix(1,0,1,0,0,0), which flattens", '<div style="transform:matrix(1,0,1,0,0,0)">SECRET</div>'],
+    ["scale:0", '<div style="scale:0">SECRET</div>'],
+    ["scale:1 0", '<div style="scale:1 0">SECRET</div>'],
+    ["zoom:0.01", '<div style="zoom:0.01">SECRET</div>'],
+  ])("%s", (_, hidden) => {
+    expect(html(`<p>Before</p>${hidden}<p>After</p>`)).toBe("Before\n\nAfter");
+  });
+
+  it.each([
+    ["width:0 without overflow:hidden", '<div style="width:0">SHOWN</div>'],
+    ["width:0 and overflow:hidden, then width:auto", '<div style="width:0;overflow:hidden;width:auto">SHOWN</div>'],
+    ["width:0 and overflow:hidden, then width:100%", '<div style="width:0;overflow:hidden;width:100%">SHOWN</div>'],
+    ["max-width:0 and overflow:hidden, then max-width:none", '<div style="max-width:0;overflow:hidden;max-width:none">SHOWN</div>'],
+    ["a hybrid column: width:100%, max-width:300px and overflow:hidden", '<div style="display:inline-block;width:100%;max-width:300px;overflow:hidden">SHOWN</div>'],
+    ["a font shorthand with a quoted family glued to its size, inside font-size:0", "<td style=\"font-size:0\"><span style=\"font:15px'Arial'\">SHOWN</span></td>"],
+    ["font-size:1px", '<span style="font-size:1px">SHOWN</span>'],
+    ["font-size:0.1em", '<span style="font-size:0.1em">SHOWN</span>'],
+    ["font-size:10%", '<span style="font-size:10%">SHOWN</span>'],
+    ["transform:scale(0), then transform:none", '<div style="transform:scale(0);transform:none">SHOWN</div>'],
+    ["transform:rotate(45deg)", '<div style="transform:rotate(45deg)">SHOWN</div>'],
+    ["transform:translate(-50%,-50%) scale(1.5)", '<div style="transform:translate(-50%,-50%) scale(1.5)">SHOWN</div>'],
+    ["transform:scale3d(1,1,0), which flattens only depth", '<div style="transform:scale3d(1,1,0)">SHOWN</div>'],
+    ["transform:scaleZ(0)", '<div style="transform:scaleZ(0)">SHOWN</div>'],
+    ["transform:scale(0.01) scale(100), which multiply", '<div style="transform:scale(0.01) scale(100)">SHOWN</div>'],
+    ["zoom:1", '<div style="zoom:1">SHOWN</div>'],
+    ["scale:1.2", '<div style="scale:1.2">SHOWN</div>'],
+  ])("but keeps %s", (_, visible) => {
+    expect(html(`<p>Before</p>${visible}<p>After</p>`)).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+});
+
 describe("bodyToText reads a style in linear time", () => {
   const zeros = "0".repeat(100_000);
   it.each([
@@ -405,6 +561,26 @@ describe("bodyToText reads a style in linear time", () => {
     ["the size of the font shorthand", `<span style="font:${zeros}! a">x</span>`],
     ["the line height of the font shorthand", `<span style="font:14px/${zeros}! a">x</span>`],
   ])("100,000 zeros then ! in %s take well under 100 ms", (_, content) => {
+    const start = performance.now();
+    html(content);
+    expect(performance.now() - start).toBeLessThan(100);
+  });
+
+  const fill = (unit: string) => unit.repeat(Math.ceil(100_000 / unit.length)).slice(0, 100_000);
+  it.each([
+    ["a property name repeated without a semicolon", fill("display:")],
+    ["a property name and a comment opener repeated", fill("display:/*")],
+    ["a property name inside nested comment openers", "display:" + fill("/* opacity:") + "*/" + "x".repeat(600)],
+    ["a property name inside nested comment openers, with a value just under the cap", "display:" + fill("/* opacity:") + "*/" + "x".repeat(500)],
+    ["a property name inside each of many comments", fill("/* opacity:x */")],
+    ["a property name and an empty comment repeated", fill("font/**/:")],
+    ["whitespace between a property name and its value", "display:" + " ".repeat(100_000) + "none"],
+    ["comments between a property name and its value", "display:" + fill("/**/") + "none"],
+    ["url( holding a parenthesis repeated", fill("url(a(")],
+    ["at-rules repeated", fill("@x{}")],
+    ["escapes repeated", fill("\\64 isplay:")],
+  ])("100,000 characters of %s take well under 100 ms", (_, style) => {
+    const content = `<div style="font-size:0"><span style="${style.replace(/"/g, "&quot;")}">x</span></div>`;
     const start = performance.now();
     html(content);
     expect(performance.now() - start).toBeLessThan(100);
