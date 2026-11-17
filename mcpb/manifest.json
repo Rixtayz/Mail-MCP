@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "mail-mcp",
-  "display_name": "Mail-MCP (Outlook.com / Hotmail)",
+  "display_name": "Mail-MCP (Outlook.com and Hotmail)",
   "version": "0.2.0",
   "icon": "icon.png",
-  "description":"Read, search, file, delete and unsubscribe from newsletters in a personal Outlook.com / Hotmail mailbox.",
+  "description": "Read, search, file, delete and unsubscribe from newsletters in a personal Outlook.com / Hotmail mailbox.",
   "long_description": "Mail-MCP lets Claude triage a personal Outlook.com or Hotmail mailbox through Microsoft Graph: list folders, search and read messages, summarise senders, move or delete messages, and unsubscribe from mailing lists. Claude signs you in from the chat. Mail-MCP talks only to Microsoft, plus the sender's own unsubscribe address when you ask to unsubscribe.",
   "author": {
     "name": "Rixtayz"

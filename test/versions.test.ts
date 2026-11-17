@@ -33,6 +33,12 @@ describe("release metadata", () => {
     expect([...names].sort()).toEqual([...TOOLS].sort());
   });
 
+  it("gives the extension a display name that is safe as a file name", () => {
+    // Claude Desktop builds a path from the display name; a "/" made it refuse to
+    // launch the extension ("path escape").
+    expect(manifest.display_name).not.toMatch(/[\\/:*?"<>|]/);
+  });
+
   it("maps the optional client id user setting to MAIL_MCP_CLIENT_ID", () => {
     expect(manifest.server.mcp_config.env).toEqual({
       MAIL_MCP_CLIENT_ID: "${user_config.client_id}",
