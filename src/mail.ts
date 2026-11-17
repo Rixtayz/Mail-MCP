@@ -2,7 +2,15 @@ import { PAGE_SIZE_SCAN } from "./constants.js";
 import { bodyToText, summarizeMessage, truncate, type MessageSummary } from "./format.js";
 import { GraphClient, odataString } from "./graph.js";
 import type { BatchRequest, GraphHeader, GraphMailFolder, GraphMessage, UnsubscribeInfo } from "./types.js";
-import { buildMailtoUrl, checkUnsubscribeLink, oneClickPost, parseListUnsubscribe, type Refusal, type UnsubscribeNetwork } from "./unsubscribe.js";
+import {
+  buildMailtoUrl,
+  checkUnsubscribeLink,
+  checkUnsubscribeLinkWithoutLookup,
+  oneClickPost,
+  parseListUnsubscribe,
+  type Refusal,
+  type UnsubscribeNetwork,
+} from "./unsubscribe.js";
 
 const WELL_KNOWN = new Set(["inbox", "drafts", "sentitems", "deleteditems", "junkemail", "archive", "outbox"]);
 const LIST_SELECT = "id,subject,from,receivedDateTime,isRead,bodyPreview";
@@ -49,6 +57,19 @@ export interface ActionOutcome {
   error?: string;
 }
 
+/** The most messages mail_bulk_by_sender acts on in one call. */
+export const BULK_LIMIT = 5000;
+
+export interface BulkResult {
+  /** Messages acted on, or that would be with a dry run: at most BULK_LIMIT. */
+  matched: number;
+  /** True when the sender has more than BULK_LIMIT messages in the folder: only BULK_LIMIT were counted and acted on. */
+  capped: boolean;
+  dryRun: boolean;
+  /** One per message acted on; empty for a dry run. */
+  outcomes: ActionOutcome[];
+}
+
 export type UnsubscribeMethod = "one-click" | "mailto" | "browser" | "blocked" | "none";
 
 const LOCAL_LINK =
@@ -58,6 +79,48 @@ const MAILTO_HOWTO = "Mail-MCP never sends email: give the user this link. It op
 
 function blockedDetail(refusal: Refusal): string {
   return refusal.reason === "non-public" ? LOCAL_LINK : `This unsubscribe link could not be checked (${refusal.why}), so it was not opened.`;
+}
+
+/** The unsubscribe options of a message as mail_get_message and mail_senders_summary show them. */
+export interface UnsubscribeOptions {
+  /** The method mail_unsubscribe would use. */
+  method: UnsubscribeMethod;
+  oneClick: boolean;
+  /** The https link, only when it may be opened. */
+  https?: string;
+  mailto?: string;
+  mailtoSubject?: string;
+  mailtoBody?: string;
+  /** Why the link is blocked, or not used. */
+  detail?: string;
+}
+
+/**
+ * `info` labelled with the method `MailService.unsubscribe` would use, following the same cascade
+ * without the network, and without anything that cascade would not hand over: a link it would block
+ * (a non-public IP address, `localhost`, a name under `.localhost`, not a valid URL) leaves out the
+ * link and the mailto address, and a plain http link is never shown. A host name is only looked up
+ * when mail_unsubscribe runs, so a `one-click` or `browser` label can still end up `blocked` then.
+ */
+export function unsubscribeOptions(info: UnsubscribeInfo): UnsubscribeOptions {
+  const mailto = info.mailto
+    ? {
+        mailto: info.mailto,
+        ...(info.mailtoSubject ? { mailtoSubject: info.mailtoSubject } : {}),
+        ...(info.mailtoBody ? { mailtoBody: info.mailtoBody } : {}),
+      }
+    : undefined;
+  if (info.https) {
+    const refusal = checkUnsubscribeLinkWithoutLookup(info.https);
+    if (refusal) return { method: "blocked", oneClick: false, detail: blockedDetail(refusal) };
+    if (!/^https:\/\//i.test(info.https)) {
+      return mailto
+        ? { method: "mailto", oneClick: false, ...mailto, detail: `${HTTP_LINK} The sender also accepts unsubscribe requests by email.` }
+        : { method: "blocked", oneClick: false, detail: HTTP_LINK };
+    }
+    return { method: info.oneClick ? "one-click" : "browser", oneClick: info.oneClick, https: info.https, ...mailto };
+  }
+  return mailto ? { method: "mailto", oneClick: false, ...mailto } : { method: "none", oneClick: false };
 }
 
 export interface UnsubscribeOutcome {
@@ -299,24 +362,50 @@ export class MailService {
   }
 
   /**
-   * Soft delete = move to the Deleted Items folder (visible in Outlook, restorable).
+   * Soft delete: move to the Deleted Items folder (visible in Outlook, restorable). Never deletes permanently.
    * Graph's DELETE would instead put the item in Recoverable Items, invisible to the user, so it is not used.
-   * Permanent = permanentDelete (irreversible).
    */
-  async delete(ids: string[], permanent: boolean): Promise<ActionOutcome[]> {
-    if (!permanent) return this.move(ids, "deleteditems");
+  async delete(ids: string[]): Promise<ActionOutcome[]> {
+    return this.move(ids, "deleteditems");
+  }
+
+  /** Permanent deletion (Graph permanentDelete): irreversible. Only the mail_purge tool calls it. */
+  async permanentDelete(ids: string[]): Promise<ActionOutcome[]> {
     return this.runBatch(ids.map((id) => ({ id, method: "POST" as const, url: `/me/messages/${encodeURIComponent(id)}/permanentDelete` })));
   }
 
-  /** Collect every message id from a sender in a folder. */
-  async idsFromSender(from: string, folder: string | undefined, maxItems = 5000): Promise<string[]> {
+  /**
+   * Collect the ids of the messages from a sender in a folder, at most `maxItems`. `capped` is true
+   * when the sender has more messages there than that.
+   */
+  async idsFromSender(from: string, folder: string | undefined, maxItems = BULK_LIMIT): Promise<{ ids: string[]; capped: boolean }> {
     const folderId = await this.resolveFolderId(folder);
     const filter = encodeURIComponent(`from/emailAddress/address eq ${odataString(from.toLowerCase())}`);
     const ids: string[] = [];
-    for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${folderId}/messages?$select=id&$top=${PAGE_SIZE_SCAN}&$filter=${filter}`, maxItems)) {
+    // One more than the limit tells whether the sender has more messages than one call handles.
+    for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${folderId}/messages?$select=id&$top=${PAGE_SIZE_SCAN}&$filter=${filter}`, maxItems + 1)) {
       ids.push(m.id);
     }
-    return ids;
+    const capped = ids.length > maxItems;
+    return { ids: capped ? ids.slice(0, maxItems) : ids, capped };
+  }
+
+  /**
+   * Move every message from a sender in a folder to `targetFolder` (action "move") or to Deleted Items
+   * (action "delete"), at most BULK_LIMIT per call. Never deletes permanently. A dry run unless
+   * `dryRun` is exactly `false`: it then only counts the messages it would act on, after checking
+   * that `targetFolder` exists.
+   */
+  async bulkBySender(p: { from: string; folder?: string; action: "move" | "delete"; targetFolder?: string; dryRun?: boolean }): Promise<BulkResult> {
+    const dryRun = p.dryRun !== false; // only an explicit false acts
+    if (p.action === "move") {
+      if (!p.targetFolder) throw new Error("`targetFolder` is required when action = move.");
+      await this.resolveFolderId(p.targetFolder);
+    }
+    const { ids, capped } = await this.idsFromSender(p.from, p.folder);
+    if (dryRun || ids.length === 0) return { matched: ids.length, capped, dryRun, outcomes: [] };
+    const outcomes = p.action === "move" ? await this.move(ids, p.targetFolder!) : await this.delete(ids);
+    return { matched: ids.length, capped, dryRun: false, outcomes };
   }
 
   invalidateSummaries(): void {

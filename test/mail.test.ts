@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { GraphClient } from "../src/graph.js";
-import { MailService } from "../src/mail.js";
-import { buildMailtoUrl, type HostResolver, type UnsubscribeNetwork } from "../src/unsubscribe.js";
+import { MailService, unsubscribeOptions } from "../src/mail.js";
+import { buildMailtoUrl, parseListUnsubscribe, type HostResolver, type UnsubscribeNetwork } from "../src/unsubscribe.js";
 import { fakeRequest } from "./fake-request.js";
 
 // The real buildMailtoUrl, wrapped so that one test can make it fail. Every other call passes through.
@@ -132,7 +132,7 @@ describe("MailService actions", () => {
     expect(calls.some((c) => c.url.endsWith("/$batch"))).toBe(true);
   });
 
-  it("delete moves to deleteditems by default and uses permanentDelete when asked", async () => {
+  it("delete only ever moves to deleteditems; permanentDelete is a separate method", async () => {
     const seen: string[] = [];
     const { mail } = service((url, init) => {
       if (url.endsWith("/$batch")) {
@@ -142,9 +142,100 @@ describe("MailService actions", () => {
       }
       return {};
     });
-    await mail.delete(["x"], false);
-    await mail.delete(["y"], true);
-    expect(seen).toEqual(["POST /me/messages/x/move -> deleteditems", "POST /me/messages/y/permanentDelete"]);
+    await mail.delete(["x"]);
+    // A caller still passing the old `permanent` flag gets a soft delete, never a purge.
+    await (mail.delete as (...args: unknown[]) => Promise<unknown>)(["z"], true);
+    await mail.permanentDelete(["y"]);
+    expect(seen).toEqual(["POST /me/messages/x/move -> deleteditems", "POST /me/messages/z/move -> deleteditems", "POST /me/messages/y/permanentDelete"]);
+  });
+});
+
+describe("MailService.bulkBySender", () => {
+  const fromSender = () =>
+    service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        return { responses: reqs.map((r) => ({ id: r.id, status: 201, body: { id: `NEW_${r.id}` } })) };
+      }
+      return { value: [{ id: "m1" }, { id: "m2" }] };
+    });
+
+  it("is a dry run when called without dryRun: counts and makes no POST", async () => {
+    const { mail, calls } = fromSender();
+    const r = await mail.bulkBySender({ from: "news@x.example", action: "delete" });
+    expect(r).toEqual({ matched: 2, capped: false, dryRun: true, outcomes: [] });
+    expect(calls.filter((c) => (c.init.method ?? "GET") !== "GET")).toEqual([]);
+  });
+
+  it("acts only on an explicit dryRun: false", async () => {
+    const { mail, calls } = fromSender();
+    const r = await mail.bulkBySender({ from: "news@x.example", action: "delete", dryRun: false });
+    expect(r).toMatchObject({ matched: 2, capped: false, dryRun: false });
+    expect(r.outcomes).toHaveLength(2);
+    expect(calls.filter((c) => c.init.method === "POST").map((c) => c.url)).toEqual(["https://graph.microsoft.com/v1.0/$batch"]);
+  });
+});
+
+describe("unsubscribeOptions", () => {
+  const headers = (h: Record<string, string>) => Object.entries(h).map(([name, value]) => ({ name, value }));
+  const oneClick = { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
+
+  it.each([
+    ["a one-click https link", { "List-Unsubscribe": "<https://x.example/u>", ...oneClick }, "one-click"],
+    ["an https link without one-click", { "List-Unsubscribe": "<https://x.example/u>" }, "browser"],
+    ["an https link and a mailto", { "List-Unsubscribe": "<https://x.example/u>, <mailto:stop@x.example>" }, "browser"],
+    ["a mailto only", { "List-Unsubscribe": "<mailto:stop@x.example>" }, "mailto"],
+    ["no header", {}, "none"],
+    ["a plain http link and a mailto", { "List-Unsubscribe": "<http://x.example/u>, <mailto:stop@x.example>" }, "mailto"],
+    ["a plain http link alone", { "List-Unsubscribe": "<http://x.example/u>", ...oneClick }, "blocked"],
+    ["a one-click link to a private address, with a mailto", { "List-Unsubscribe": "<https://192.168.1.1/u>, <mailto:stop@x.example>", ...oneClick }, "blocked"],
+    ["a link to [::1]", { "List-Unsubscribe": "<https://[::1]/u>" }, "blocked"],
+    ["a NAT64 link carrying a private address", { "List-Unsubscribe": "<https://[64:ff9b::a00:1]/u>", ...oneClick }, "blocked"],
+    ["a one-click link to localhost, with a mailto", { "List-Unsubscribe": "<https://localhost:8443/u>, <mailto:stop@x.example>", ...oneClick }, "blocked"],
+    ["a link to a name under .localhost", { "List-Unsubscribe": "<https://shop.localhost/u>" }, "blocked"],
+    ["a plain http link to a private address, with a mailto", { "List-Unsubscribe": "<http://10.0.0.1/u>, <mailto:stop@x.example>" }, "blocked"],
+    ["a link that is not a valid URL, with a mailto", { "List-Unsubscribe": "<https://[nothex]/u>, <mailto:stop@x.example>", ...oneClick }, "blocked"],
+    ["a one-click link to a public address", { "List-Unsubscribe": "<https://93.184.215.14/u>", ...oneClick }, "one-click"],
+  ])("labels %s with the method mail_unsubscribe uses, without a lookup", async (_label, h, expected) => {
+    const lookups: string[] = [];
+    const { mail } = service(
+      () => ({ id: "m", subject: "Promo", from: { emailAddress: { address: "news@x.example" } }, internetMessageHeaders: headers(h) }),
+      {
+        resolveHost: async (host) => {
+          lookups.push(host);
+          return publicDns(host);
+        },
+      },
+    );
+    const options = unsubscribeOptions(parseListUnsubscribe(headers(h)));
+    expect(lookups).toEqual([]);
+    expect(options.method).toBe(expected);
+    expect((await mail.unsubscribe("m")).method).toBe(expected);
+  });
+
+  it("leaves out every link and address when the link is blocked", () => {
+    const info = parseListUnsubscribe(headers({ "List-Unsubscribe": "<https://192.168.1.1/u>, <mailto:stop@x.example?subject=Stop>", ...oneClick }));
+    expect(unsubscribeOptions(info)).toEqual({ method: "blocked", oneClick: false, detail: LOCAL_LINK });
+  });
+
+  it("says why a link that is not a valid URL is blocked", () => {
+    expect(unsubscribeOptions(parseListUnsubscribe(headers({ "List-Unsubscribe": "<https://[nothex]/u>" })))).toEqual({
+      method: "blocked",
+      oneClick: false,
+      detail: "This unsubscribe link could not be checked (the URL is not valid), so it was not opened.",
+    });
+  });
+
+  it("keeps the mailto subject and body, but not a plain http link, when http falls back to email", () => {
+    const info = parseListUnsubscribe(headers({ "List-Unsubscribe": "<http://x.example/u>, <mailto:stop@x.example?subject=Stop&body=Please>" }));
+    expect(unsubscribeOptions(info)).toEqual({
+      method: "mailto",
+      oneClick: false,
+      mailto: "stop@x.example",
+      mailtoSubject: "Stop",
+      mailtoBody: "Please",
+      detail: `${HTTP_LINK} The sender also accepts unsubscribe requests by email.`,
+    });
   });
 });
 

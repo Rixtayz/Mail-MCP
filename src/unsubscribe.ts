@@ -248,16 +248,20 @@ class RefusedHost extends Error {
   }
 }
 
+/** A refusal when `hostname` is `localhost` or a name under `.localhost`, which always point to this computer. */
+function localName(hostname: string): Refusal | undefined {
+  const name = hostname.replace(/\.$/, "").toLowerCase();
+  return name === "localhost" || name.endsWith(".localhost") ? { reason: "non-public", why: `${name} points to this computer` } : undefined;
+}
+
 /**
  * Every address `hostname` resolves to, each with its family, when all of them are public.
  * Throws RefusedHost when the name is local, cannot be resolved, or any address is non-public,
  * since a connection may go to any of them.
  */
 async function publicAddresses(hostname: string, resolveHost: HostResolver): Promise<{ address: string; family: number }[]> {
-  const name = hostname.replace(/\.$/, "").toLowerCase();
-  if (name === "localhost" || name.endsWith(".localhost")) {
-    throw new RefusedHost({ reason: "non-public", why: `${name} points to this computer` });
-  }
+  const local = localName(hostname);
+  if (local) throw new RefusedHost(local);
   let addresses: readonly { address: string }[];
   try {
     addresses = await resolveHost(hostname);
@@ -272,12 +276,12 @@ async function publicAddresses(hostname: string, resolveHost: HostResolver): Pro
 }
 
 /**
- * Why the unsubscribe link `url` must be neither POSTed to nor handed to a browser, or undefined
- * when its host is public. The URL comes from the email, so its sender must not be able to aim
- * this machine or the user's browser at localhost, the local network or a cloud metadata endpoint.
- * A hostname is refused when any of its addresses is non-public.
+ * What can be said about the unsubscribe link `url` without a DNS lookup: why it must not be used
+ * when it is not a valid URL, or its host is an IP address in a non-public range, `localhost` or a
+ * name under `.localhost`; undefined when its host is a public IP address or a name, which only a
+ * lookup can judge (see `checkUnsubscribeLink`). The scheme is not looked at.
  */
-export async function checkUnsubscribeLink(url: string, resolveHost: HostResolver = lookupAll): Promise<Refusal | undefined> {
+export function checkUnsubscribeLinkWithoutLookup(url: string): Refusal | undefined {
   let hostname: string;
   try {
     hostname = new URL(url).hostname;
@@ -286,6 +290,20 @@ export async function checkUnsubscribeLink(url: string, resolveHost: HostResolve
   }
   const literal = hostname.replace(/^\[(.*)\]$/, "$1");
   if (isIP(literal)) return isNonPublic(literal) ? { reason: "non-public", why: `${literal} is ${NON_PUBLIC_WORDS}` } : undefined;
+  return localName(hostname);
+}
+
+/**
+ * Why the unsubscribe link `url` must be neither POSTed to nor handed to a browser, or undefined
+ * when its host is public. The URL comes from the email, so its sender must not be able to aim
+ * this machine or the user's browser at localhost, the local network or a cloud metadata endpoint.
+ * A hostname is refused when any of its addresses is non-public.
+ */
+export async function checkUnsubscribeLink(url: string, resolveHost: HostResolver = lookupAll): Promise<Refusal | undefined> {
+  const offline = checkUnsubscribeLinkWithoutLookup(url);
+  if (offline) return offline;
+  const hostname = new URL(url).hostname;
+  if (isIP(hostname.replace(/^\[(.*)\]$/, "$1"))) return undefined;
   try {
     await publicAddresses(hostname, resolveHost);
     return undefined;
