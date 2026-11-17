@@ -150,6 +150,32 @@ describe("MailService actions", () => {
   });
 });
 
+describe("MailService.bulkBySender", () => {
+  const fromSender = () =>
+    service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        return { responses: reqs.map((r) => ({ id: r.id, status: 201, body: { id: `NEW_${r.id}` } })) };
+      }
+      return { value: [{ id: "m1" }, { id: "m2" }] };
+    });
+
+  it("is a dry run when called without dryRun: counts and makes no POST", async () => {
+    const { mail, calls } = fromSender();
+    const r = await mail.bulkBySender({ from: "news@x.example", action: "delete" });
+    expect(r).toEqual({ matched: 2, capped: false, dryRun: true, outcomes: [] });
+    expect(calls.filter((c) => (c.init.method ?? "GET") !== "GET")).toEqual([]);
+  });
+
+  it("acts only on an explicit dryRun: false", async () => {
+    const { mail, calls } = fromSender();
+    const r = await mail.bulkBySender({ from: "news@x.example", action: "delete", dryRun: false });
+    expect(r).toMatchObject({ matched: 2, capped: false, dryRun: false });
+    expect(r.outcomes).toHaveLength(2);
+    expect(calls.filter((c) => c.init.method === "POST").map((c) => c.url)).toEqual(["https://graph.microsoft.com/v1.0/$batch"]);
+  });
+});
+
 describe("unsubscribeOptions", () => {
   const headers = (h: Record<string, string>) => Object.entries(h).map(([name, value]) => ({ name, value }));
   const oneClick = { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };

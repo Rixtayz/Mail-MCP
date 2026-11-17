@@ -392,16 +392,18 @@ export class MailService {
 
   /**
    * Move every message from a sender in a folder to `targetFolder` (action "move") or to Deleted Items
-   * (action "delete"), at most BULK_LIMIT per call. Never deletes permanently. With `dryRun`, only
-   * counts the messages it would act on, after checking that `targetFolder` exists.
+   * (action "delete"), at most BULK_LIMIT per call. Never deletes permanently. A dry run unless
+   * `dryRun` is exactly `false`: it then only counts the messages it would act on, after checking
+   * that `targetFolder` exists.
    */
-  async bulkBySender(p: { from: string; folder?: string; action: "move" | "delete"; targetFolder?: string; dryRun: boolean }): Promise<BulkResult> {
+  async bulkBySender(p: { from: string; folder?: string; action: "move" | "delete"; targetFolder?: string; dryRun?: boolean }): Promise<BulkResult> {
+    const dryRun = p.dryRun !== false; // only an explicit false acts
     if (p.action === "move") {
       if (!p.targetFolder) throw new Error("`targetFolder` is required when action = move.");
       await this.resolveFolderId(p.targetFolder);
     }
     const { ids, capped } = await this.idsFromSender(p.from, p.folder);
-    if (p.dryRun || ids.length === 0) return { matched: ids.length, capped, dryRun: p.dryRun, outcomes: [] };
+    if (dryRun || ids.length === 0) return { matched: ids.length, capped, dryRun, outcomes: [] };
     const outcomes = p.action === "move" ? await this.move(ids, p.targetFolder!) : await this.delete(ids);
     return { matched: ids.length, capped, dryRun: false, outcomes };
   }
