@@ -349,6 +349,53 @@ describe("bodyToText shows hidden content again only from a plain ASCII declarat
   });
 });
 
+describe("bodyToText decodes CSS escapes when it looks for hiding (R15)", () => {
+  it.each([
+    ["an escaped letter in the property", '<div style="d\\69 splay:none">SECRET</div>'],
+    ["an escaped letter in display:none", '<div style="display:\\6e one">SECRET</div>'],
+    ["a six-digit escape in display:none", '<div style="display:\\00006e one">SECRET</div>'],
+    ["an escaped letter that is not hexadecimal", '<div style="display:n\\one">SECRET</div>'],
+    ["an escaped zero opacity", '<div style="opacity:\\30">SECRET</div>'],
+    ["an escaped letter in visibility:hidden", '<span style="visibility:hidd\\65n">SECRET</span>'],
+    ["an escaped zero font size", '<span style="font-size:\\30">SECRET</span>'],
+    ["an escaped zero size in the font shorthand", '<span style="font:\\30/0 a">SECRET</span>'],
+    ["an escaped zero height and escaped overflow:hidden", '<div style="height:\\30;overflow:hidd\\65n">SECRET</div>'],
+    ["an escaped display:none after a quote in an unquoted url()", "<div style=\"background:url(a');d\\69 splay:none\">SECRET</div>"],
+    // Showing again is unchanged: after a backslash, nothing shows content again.
+    ["display:block after an escaped display:none", '<div style="display:\\6e one;display:block">SECRET</div>'],
+  ])("drops %s", (_, hidden) => {
+    expect(html(`<p>Before</p>${hidden}<p>After</p>`)).toBe("Before\n\nAfter");
+  });
+
+  it("keeps an escaped colon, which makes no declaration", () => {
+    expect(html('<p>Before</p><div style="display\\3a none">SHOWN</div><p>After</p>')).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+});
+
+describe("bodyToText reads a quoted font name outside ASCII as a size reset (R16)", () => {
+  it.each([
+    ["a quoted CJK family", 'font:15px "微软雅黑"'],
+    ["quoted Latin and Japanese families with a line height", "font:14px/1.5 'Noto Sans JP', \"ヒラギノ角ゴ\""],
+  ])("keeps %s inside font-size:0", (_, style) => {
+    const t = html(`<p>Before</p><td style="font-size:0"><span style='${style.replace(/'/g, "&#39;")}'>SHOWN</span></td><p>After</p>`);
+    expect(t).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+
+  it("keeps a quoted CJK family after font-size:0 on the same element", () => {
+    expect(html('<p>Before</p><span style="font-size:0;font:15px &quot;微软雅黑&quot;">SHOWN</span><p>After</p>')).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+
+  it.each([
+    ["an unquoted CJK family", "font:15px 微软雅黑"],
+    ["a line feed inside the quoted family", "font:15px &quot;微软&#10;雅黑&quot;"],
+    ["a size in full-width digits", "font:１５px &quot;微软雅黑&quot;"],
+    ["a no-break space before the quoted family", "font:15px&nbsp;&quot;微软雅黑&quot;"],
+    ["a no-break space inside !important", "font:15px &quot;微软雅黑&quot; !&nbsp;important"],
+  ])("drops %s inside font-size:0", (_, style) => {
+    expect(html(`<p>Before</p><td style="font-size:0"><span style="${style}">SECRET</span></td><p>After</p>`)).toBe("Before\n\nAfter");
+  });
+});
+
 describe("bodyToText reads a style in linear time", () => {
   const zeros = "0".repeat(100_000);
   it.each([

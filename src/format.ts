@@ -134,23 +134,23 @@ const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "scrip
 // Hiding is looked for twice: in the declarations as CSS splits them, and in the pieces between
 // every two `;`, whatever quotes, url() or blocks surround them. A hiding declaration found either
 // way applies, so a construct the CSS split might misread cannot swallow a later `display:none`.
-// Hiding is read loosely: any whitespace trimmed, any case folded.
+// Hiding is read loosely: CSS escapes decoded, any whitespace trimmed, any case folded.
 //
 // Showing again (a later declaration of the same property, or a visible font size under a zero
-// size) counts only from a declaration as CSS splits it, written in plain ASCII without a
-// backslash, whose whole value matches a short allowlist exactly, the way CSS reads it: only ASCII
-// whitespace trimmed, only ASCII case folded. Nor does any declaration count once the split meets
-// something it cannot place the way CSS does. Anything else (an unknown or vendor keyword, a
-// keyword combination, a function, a trailing dot, a sign, a no-break space, a Kelvin sign) is
-// ignored, so hidden content stays hidden.
+// size) counts only from a declaration as CSS splits it, written in plain ASCII (a quoted family
+// name in the font shorthand aside) without a backslash, whose whole value matches a short
+// allowlist exactly, the way CSS reads it: only ASCII whitespace trimmed, only ASCII case folded.
+// Nor does any declaration count once the split meets something it cannot place the way CSS does,
+// a backslash included. Anything else (an unknown or vendor keyword, a keyword combination, a
+// function, a trailing dot, a sign, a no-break space, a Kelvin sign) is ignored, so hidden content
+// stays hidden.
 //
 // On display, visibility, opacity, height and overflow, a function, var() included, counts as
 // hiding: a custom property can carry `none` or `0`. A font size given by a function, such as
 // clamp() or calc(), which modern newsletters use, counts as visible instead, unless the element is
 // under a zero size or has a zero size declared too. So a zero size written as a function is not
 // caught (accepted): `font-size:var(--z)` with `--z:0`, `font-size:calc(0px)`,
-// `font-size:clamp(0px,0vw,0px)`, `font:calc(0px) a`. Nor is a hiding declaration spelled with
-// CSS escapes, such as `display:\6e one` (accepted): escapes are never decoded.
+// `font-size:clamp(0px,0vw,0px)`, `font:calc(0px) a`.
 
 /** One declaration of an inline style: lower-case property and value, whitespace collapsed, without `!important`. */
 interface Declaration {
@@ -262,13 +262,40 @@ function strictPieces(style: string): StrictPiece[] {
 /** The properties whose declarations can hide content; the others are not read. */
 const STYLE_PROPERTIES = new Set(["display", "visibility", "opacity", "height", "max-height", "overflow", "overflow-x", "overflow-y", "font-size", "font", "all"]);
 
-/** A piece read loosely, for hiding: any whitespace trimmed and collapsed, any case folded. */
+/** A CSS escape: a backslash and 1 to 6 hex digits with one optional whitespace, or a backslash and any other character. */
+const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([\s\S])|$)/g;
+const REPLACEMENT_CHARACTER = String.fromCharCode(0xfffd);
+
+/** `text` with its CSS escapes decoded, as CSS decodes them in a name or a keyword. */
+function decodeEscapes(text: string): string {
+  if (!text.includes("\\")) return text;
+  return text.replace(CSS_ESCAPE, (_, hex: string | undefined, other: string | undefined) => {
+    if (hex === undefined) return other ?? REPLACEMENT_CHARACTER;
+    const code = Number.parseInt(hex, 16);
+    return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? REPLACEMENT_CHARACTER : String.fromCodePoint(code);
+  });
+}
+
+/** Where the colon of a declaration is: the first one not escaped by a backslash, or -1. */
+function colonIndex(text: string): number {
+  if (!text.includes("\\")) return text.indexOf(":");
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\") i++; // an escaped character, never the colon
+    else if (text[i] === ":") return i;
+  }
+  return -1;
+}
+
+/**
+ * A piece read loosely, for hiding: CSS escapes decoded (`d\69 splay:\6e one` is `display:none`
+ * to a browser too), any whitespace trimmed and collapsed, any case folded.
+ */
 function looseDeclaration(text: string): Declaration | undefined {
-  const colon = text.indexOf(":");
+  const colon = colonIndex(text);
   if (colon < 0) return undefined;
-  const property = text.slice(0, colon).trim().toLowerCase();
+  const property = decodeEscapes(text.slice(0, colon)).trim().toLowerCase();
   if (!STYLE_PROPERTIES.has(property)) return undefined;
-  let value = text.slice(colon + 1).replace(/\s+/g, " ").trim().toLowerCase();
+  let value = decodeEscapes(text.slice(colon + 1)).replace(/\s+/g, " ").trim().toLowerCase();
   const important = /! ?important$/.test(value);
   if (important) value = value.replace(/ ?! ?important$/, "");
   return { property, value, important };
@@ -286,16 +313,22 @@ function cssCollapse(text: string): string {
   return s.slice(s.startsWith(" ") ? 1 : 0, s.endsWith(" ") ? -1 : undefined);
 }
 
+/** The quoted strings of a declaration, each to its closing quote or to the end. */
+const QUOTED = /"[^"]*"?|'[^']*'?/g;
+
 /**
- * A piece read as CSS reads it, for showing again: undefined when it holds a character outside
- * ASCII or a backslash; otherwise only ASCII whitespace trimmed and collapsed, only ASCII case folded.
+ * A piece read as CSS reads it, for showing again: undefined when it holds a backslash or a
+ * character outside ASCII (in the font shorthand, a quoted family name may hold any character: a
+ * quoted string is opaque); otherwise only ASCII whitespace trimmed and collapsed, only ASCII case
+ * folded. The piece comes from strictPieces, clean, so none of its strings holds a line break.
  */
 function strictDeclaration(text: string): Declaration | undefined {
   const colon = text.indexOf(":");
   if (colon < 0) return undefined;
   const property = cssCollapse(text.slice(0, colon)).toLowerCase();
-  if (!STYLE_PROPERTIES.has(property) || NOT_ASCII.test(text) || text.includes("\\")) return undefined;
-  // From here the text is ASCII, so toLowerCase() folds ASCII case only.
+  if (!STYLE_PROPERTIES.has(property) || text.includes("\\")) return undefined;
+  if (NOT_ASCII.test(property === "font" ? text.replace(QUOTED, "") : text)) return undefined;
+  // Outside quoted strings the text is ASCII, so toLowerCase() folds ASCII case only there.
   let value = cssCollapse(text.slice(colon + 1)).toLowerCase();
   const important = /! ?important$/.test(value);
   if (important) value = value.replace(/ ?! ?important$/, "");
