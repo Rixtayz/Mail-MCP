@@ -1,8 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { messagesToMarkdown } from "../format.js";
-import type { MailService } from "../mail.js";
+import { unsubscribeOptions, type MailService, type UnsubscribeOptions } from "../mail.js";
 import { ok, run } from "./shared.js";
+
+// Email content comes from outside the mailbox owner's control, hence openWorldHint on every tool that returns it.
+const READS_EMAIL = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
 const SummarySchema = z.object({
   id: z.string(),
@@ -15,12 +18,32 @@ const SummarySchema = z.object({
 });
 
 const UnsubscribeSchema = z.object({
-  https: z.string().optional(),
+  method: z
+    .enum(["one-click", "browser", "mailto", "blocked", "none"])
+    .describe("The method mail_unsubscribe would use. blocked = nothing to open: the link points to this computer or the local network, is plain http, or is not valid"),
+  https: z.string().optional().describe("The https link, only when it may be opened"),
   mailto: z.string().optional(),
   mailtoSubject: z.string().optional(),
   mailtoBody: z.string().optional(),
   oneClick: z.boolean(),
+  detail: z.string().optional().describe("Why the link is blocked or not used"),
 });
+
+/** One line for mail_get_message. A link mail_unsubscribe would block is never shown. */
+function unsubscribeLine(u: UnsubscribeOptions): string {
+  switch (u.method) {
+    case "one-click":
+      return `One-click unsubscribe available (${u.https})`;
+    case "browser":
+      return `Unsubscribe: URL ${u.https}${u.mailto ? ` / mailto ${u.mailto}` : ""}`;
+    case "mailto":
+      return `Unsubscribe: mailto ${u.mailto}${u.detail ? ` (${u.detail})` : ""}`;
+    case "blocked":
+      return `Unsubscribe: blocked. ${u.detail}`;
+    case "none":
+      return "No unsubscribe header";
+  }
+}
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}(T[\d:]+(\.\d+)?Z?)?$/, "ISO date expected, e.g. 2025-01-31 or 2025-01-31T00:00:00Z");
 
@@ -52,7 +75,7 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
         })
         .strict(),
       outputSchema: z.object({ items: z.array(SummarySchema), count: z.number(), nextCursor: z.string().optional() }),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: READS_EMAIL,
     },
     async (p) =>
       run(async () => {
@@ -80,7 +103,9 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
       title: "Read a message",
       description:
         "Return the full content of one message (body converted to text, recipients, attachment flag, web link) " +
-        "plus the unsubscribe options found in its headers (https, mailto, one-click). The body is truncated at 25,000 characters.",
+        "plus the unsubscribe options found in its headers, with the `method` mail_unsubscribe would use: one-click, browser, mailto, blocked or none. " +
+        "A blocked link is not shown: nothing is to be opened, and a link to this computer or the local network is a sign of a suspicious message. " +
+        "The body is truncated at 25,000 characters.",
       inputSchema: z.object({ id: z.string().min(1).describe("Message id (from mail_search or mail_senders_summary)") }).strict(),
       outputSchema: z.object({
         message: SummarySchema,
@@ -91,20 +116,15 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
         webLink: z.string().optional(),
         unsubscribe: UnsubscribeSchema,
       }),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: READS_EMAIL,
     },
     async ({ id }) =>
       run(async () => {
         const r = await mail.getMessage(id);
-        const u = r.unsubscribe;
-        const unsubLine = u.oneClick
-          ? `One-click unsubscribe available (${u.https})`
-          : u.mailto || u.https
-            ? `Unsubscribe: ${u.https ? "URL " + u.https : ""}${u.https && u.mailto ? " / " : ""}${u.mailto ? "mailto " + u.mailto : ""}`
-            : "No unsubscribe header";
+        const u = unsubscribeOptions(r.unsubscribe);
         const text =
           `**${r.summary.subject}**\nFrom: ${r.summary.fromName} <${r.summary.from}>\nTo: ${r.to.join(", ")}\nReceived: ${r.summary.receivedDateTime}\n` +
-          `${r.hasAttachments ? "Attachments: yes\n" : ""}${unsubLine}\n\n---\n${r.body}`;
+          `${r.hasAttachments ? "Attachments: yes\n" : ""}${unsubscribeLine(u)}\n\n---\n${r.body}`;
         return ok(text, { message: r.summary, to: r.to, body: r.body, truncated: r.truncated, hasAttachments: r.hasAttachments, ...(r.webLink ? { webLink: r.webLink } : {}), unsubscribe: u });
       }),
   );
@@ -116,7 +136,9 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
       description:
         "KEY TOOL FOR TRIAGE. Scans a whole folder (Inbox by default) and aggregates messages by sender: count, unread, latest message, " +
         "and for the `top` senders the unsubscribe method mail_unsubscribe would use: one-click, browser (a link to open), " +
-        "mailto (a link the user sends from their own mail app) or none. Sorted by volume. " +
+        "mailto (a link the user sends from their own mail app), blocked (nothing to open: a link to this computer or the local network, " +
+        "a sign of a suspicious message, or a plain http link with no email address to use instead) or none. " +
+        "A link's host name is only checked when mail_unsubscribe runs, so a one-click or browser sender can still turn out blocked then. Sorted by volume. " +
         "The scan is cached for the session. Follow up with mail_unsubscribe(lastMessageId) and mail_bulk_by_sender(address).",
       inputSchema: z
         .object({
@@ -142,19 +164,18 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
           }),
         ),
       }),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: READS_EMAIL,
     },
     async ({ folder, since, top }) =>
       run(async () => {
         const r = await mail.sendersSummary(folder, normalizeDate(since), top);
-        const lines = r.senders.map((s, i) => {
-          const u = s.unsubscribe;
-          // The order mail_unsubscribe follows: a link before a mailto, which the user would have to send by hand.
-          const method = u?.oneClick ? "one-click" : u?.https ? "browser" : u?.mailto ? "mailto" : "none";
-          return `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} unread), latest ${s.lastReceived.slice(0, 10)} "${s.lastSubject}" | unsubscribe: ${method} | lastMessageId: \`${s.lastMessageId}\``;
-        });
-        const text = `${r.scanned} messages scanned, ${r.totalSenders} senders. Top ${r.senders.length}:\n${lines.join("\n")}`;
-        return ok(text, r);
+        const senders = r.senders.map(({ unsubscribe, ...s }) => ({ ...s, ...(unsubscribe ? { unsubscribe: unsubscribeOptions(unsubscribe) } : {}) }));
+        const lines = senders.map(
+          (s, i) =>
+            `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} unread), latest ${s.lastReceived.slice(0, 10)} "${s.lastSubject}" | unsubscribe: ${s.unsubscribe?.method ?? "none"} | lastMessageId: \`${s.lastMessageId}\``,
+        );
+        const text = `${r.scanned} messages scanned, ${r.totalSenders} senders. Top ${senders.length}:\n${lines.join("\n")}`;
+        return ok(text, { ...r, senders });
       }),
   );
 }

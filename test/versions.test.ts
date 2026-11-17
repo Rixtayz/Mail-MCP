@@ -11,6 +11,7 @@ const TOOLS = [
   "mail_senders_summary",
   "mail_move",
   "mail_delete",
+  "mail_purge",
   "mail_bulk_by_sender",
   "mail_unsubscribe",
   "mail_login",
@@ -38,6 +39,14 @@ describe("release metadata", () => {
   it("lists exactly the server's tools in the bundle manifest", () => {
     const names = manifest.tools.map((t: { name: string }) => t.name);
     expect([...names].sort()).toEqual([...TOOLS].sort());
+    expect(names).toHaveLength(12);
+  });
+
+  it("names only the server's tools in the inbox-cleanup skill, mail_purge included", () => {
+    const skill = readFileSync(new URL("../plugin/skills/inbox-cleanup/SKILL.md", import.meta.url), "utf8");
+    const named = new Set(skill.match(/\bmail_[a-z_]+/g));
+    for (const name of named) expect(TOOLS, name).toContain(name);
+    expect(named).toContain("mail_purge");
   });
 
   it("gives the extension a display name that is safe as a file name", () => {

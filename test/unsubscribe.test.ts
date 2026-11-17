@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { VERSION } from "../src/constants.js";
 import {
   buildMailtoUrl,
+  checkUnsubscribeLink,
+  checkUnsubscribeLinkWithoutLookup,
   embeddedIPv4,
   oneClickPost,
   parseListUnsubscribe,
@@ -391,6 +393,33 @@ describe("embeddedIPv4", () => {
 
   it.each(["2606:4700:4700::1111", "fe80::1", "1.2.3.4", "not an address"])("finds no IPv4 in %s", (address) => {
     expect(embeddedIPv4(address)).toBeUndefined();
+  });
+});
+
+describe("checkUnsubscribeLinkWithoutLookup", () => {
+  it.each([
+    ["https://192.168.1.1/u", "non-public", "192.168.1.1 is a loopback, private, link-local or other non-public address"],
+    ["http://10.0.0.1/u", "non-public", "10.0.0.1 is a loopback, private, link-local or other non-public address"],
+    ["https://[::1]/u", "non-public", "::1 is a loopback, private, link-local or other non-public address"],
+    ["https://[64:ff9b::a00:1]/u", "non-public", "64:ff9b::a00:1 is a loopback, private, link-local or other non-public address"],
+    ["https://localhost:8443/u", "non-public", "localhost points to this computer"],
+    ["https://Shop.LOCALHOST./u", "non-public", "shop.localhost points to this computer"],
+    ["https://[nothex]/u", "unverifiable", "the URL is not valid"],
+  ])("refuses %s", (url, reason, why) => {
+    expect(checkUnsubscribeLinkWithoutLookup(url)).toEqual({ reason, why });
+  });
+
+  it.each(["https://news.example/u", "http://news.example/u", "https://93.184.215.14/u", "https://[2606:4700:4700::1111]/u"])(
+    "leaves %s to the lookup, or lets a public address through",
+    (url) => {
+      expect(checkUnsubscribeLinkWithoutLookup(url)).toBeUndefined();
+    },
+  );
+
+  it.each(["https://192.168.1.1/u", "https://localhost/u", "https://[nothex]/u"])("gives the same answer as checkUnsubscribeLink for %s, which asks no resolver", async (url) => {
+    const resolveHost = vi.fn<HostResolver>(async () => [{ address: "93.184.215.14" }]);
+    expect(await checkUnsubscribeLink(url, resolveHost)).toEqual(checkUnsubscribeLinkWithoutLookup(url));
+    expect(resolveHost).not.toHaveBeenCalled();
   });
 });
 

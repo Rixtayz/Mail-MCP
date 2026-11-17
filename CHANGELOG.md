@@ -7,8 +7,21 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - A Claude plugin (`plugin/`) for Claude Code and Cowork: the Mail-MCP server, pinned to the released npm version, plus an `inbox-cleanup` skill that has Claude review senders first, confirm with you, dry-run bulk actions and ignore instructions written inside emails. Claude Code users can install it with `/plugin install mail-mcp --marketplace Rixtayz/Mail-MCP`.
+- `mail_purge` permanently deletes messages by id (1 to 500 per call). It cannot be undone, and its description tells the assistant to use it only when you explicitly ask for permanent deletion. The `inbox-cleanup` skill also has Claude confirm first.
+
+### Changed
+
+- **Breaking:** `mail_delete` no longer takes `permanent`. It only moves messages to Deleted Items, where you can restore them, and is no longer marked destructive. Permanent deletion is `mail_purge`.
+- **Breaking:** `mail_bulk_by_sender` is a dry run by default (`dryRun` now defaults to `true`): it counts the messages it would act on and changes nothing until it is called again with `dryRun: false`. It no longer takes `permanent`: it moves messages to a folder or to Deleted Items. A dry run also checks that the destination folder exists.
+- `mail_bulk_by_sender` says when a sender has more than 5,000 messages in the folder, the most one call handles: its result has `capped: true` and a sentence saying to call again for the rest. It used to stop at 5,000 without a word.
+- `mail_get_message` and `mail_senders_summary` give each unsubscribe option a `method`: the one `mail_unsubscribe` would use, now including `blocked`, with a `detail` saying why.
+- The `inbox-cleanup` skill uses `mail_purge` only when you ask for permanent deletion, runs bulk actions as a dry run first and acts only with `dryRun: false` after you confirm, and warns you that a message is suspicious when its unsubscribe link is blocked for pointing to your computer or local network.
 
 ### Security
+
+- Permanent deletion is now a tool of its own, `mail_purge`. Apps decide what the assistant may do tool by tool, so letting it use `mail_delete` or `mail_bulk_by_sender` without asking no longer lets it delete anything permanently, and a bulk action no longer runs until it is called with `dryRun: false`.
+- Tool annotations no longer understate risk: `mail_unsubscribe` is marked destructive, since it acts at the sender and cannot be undone from here, and the tools that return email content (`mail_search`, `mail_get_message`, `mail_senders_summary`) are marked open-world, since that content comes from outside.
+- `mail_senders_summary` and `mail_get_message` no longer show an unsubscribe link that `mail_unsubscribe` would block as something to open: a link to a local-network address, `localhost` or a name under `.localhost`, a link that is not valid, and any plain `http://` link are left out. A sender whose link would be blocked is labelled `blocked`, or `mailto` when a plain `http://` link comes with an email address to use instead. This takes no DNS lookup; a link's host name is still checked when `mail_unsubscribe` runs.
 
 - `mail_unsubscribe` never hands a link to this computer or the local network to the browser. When an unsubscribe link points there, directly or through its DNS name, it answers the new `method: "blocked"` with no link at all and says the message is suspicious; it used to suggest opening that link in a browser. Links whose host cannot be checked are blocked too. A plain `http://` link is never opened: the answer is the sender's `mailto:` link when there is one, `blocked` otherwise. An `https` link now wins over an `http` one listed before it.
 - The one-click unsubscribe POST connects only to an address that passed the check, so a DNS name that changes its answer between the check and the connection (DNS rebinding) cannot redirect it. `192.0.0.0/24`, `198.18.0.0/15` and the local-use NAT64 prefix `64:ff9b:1::/48` are refused as well, and NAT64, 6to4 and IPv4-translated addresses are refused when the IPv4 address they carry is non-public. The response body is no longer read.

@@ -1,7 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import type { ActionOutcome, MailService } from "../mail.js";
+import { BULK_LIMIT, type ActionOutcome, type MailService } from "../mail.js";
 import { ok, run } from "./shared.js";
+
+const BULK_LIMIT_TEXT = BULK_LIMIT.toLocaleString("en-US");
+const CAPPED = `This sender has more than ${BULK_LIMIT_TEXT} messages in this folder, the most one call handles:`;
 
 const OutcomeSchema = z.object({
   succeeded: z.number(),
@@ -49,22 +52,39 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     {
       title: "Delete messages",
       description:
-        "Delete one or more messages (up to 500 ids). By default messages go to Deleted Items (recoverable with mail_search folder=deleteditems then mail_move; their id changes). " +
-        "`permanent: true` deletes irreversibly: only use it when the user explicitly asks for it.",
-      inputSchema: z
-        .object({
-          ids: Ids,
-          permanent: z.boolean().default(false).describe("true = permanent deletion (irreversible). Default: Deleted Items."),
-        })
-        .strict(),
+        "Move one or more messages (up to 500 ids) to Deleted Items, where the user can restore them from Outlook " +
+        "(or with mail_search folder=deleteditems then mail_move; their id changes). Never deletes permanently: " +
+        "for that, use mail_purge, and only when the user explicitly asks for permanent deletion.",
+      inputSchema: z.object({ ids: Ids }).strict(),
+      outputSchema: OutcomeSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ ids }) =>
+      run(async () => {
+        const outcomes = await mail.delete(ids);
+        mail.invalidateSummaries();
+        const s = summarizeOutcomes(outcomes, "moved to Deleted Items");
+        return ok(s.text, s.structured);
+      }),
+  );
+
+  server.registerTool(
+    "mail_purge",
+    {
+      title: "Permanently delete messages",
+      description:
+        "Permanently delete one or more messages (up to 500 ids). This cannot be undone: the messages do not go to Deleted Items " +
+        "and cannot be restored. Only use it when the user explicitly asked for these messages to be deleted permanently; " +
+        "otherwise use mail_delete, which moves them to Deleted Items.",
+      inputSchema: z.object({ ids: Ids }).strict(),
       outputSchema: OutcomeSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async ({ ids, permanent }) =>
+    async ({ ids }) =>
       run(async () => {
-        const outcomes = await mail.delete(ids, permanent);
+        const outcomes = await mail.permanentDelete(ids);
         mail.invalidateSummaries();
-        const s = summarizeOutcomes(outcomes, permanent ? "permanently deleted" : "moved to Deleted Items");
+        const s = summarizeOutcomes(outcomes, "permanently deleted");
         return ok(s.text, s.structured);
       }),
   );
@@ -74,33 +94,50 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
     {
       title: "Bulk action by sender",
       description:
-        "Move or delete EVERY message from a sender (exact address) in a folder (Inbox by default). " +
-        "Use `dryRun: true` first to learn how many messages match. Deletion goes to Deleted Items unless `permanent: true`.",
+        "Move EVERY message from a sender (exact address) in a folder (Inbox by default) to another folder, or to Deleted Items, " +
+        `at most ${BULK_LIMIT_TEXT} per call. A dry run by default: it only counts the messages it would act on (\`matched\`) and changes nothing. ` +
+        "Tell the user that count and, once they confirm, call again with `dryRun: false`. " +
+        `\`capped: true\` means the sender has more than ${BULK_LIMIT_TEXT} messages there: call again for the rest. ` +
+        "Never deletes permanently (see mail_purge).",
       inputSchema: z
         .object({
           from: z.string().email().describe("Exact sender address"),
           folder: z.string().optional().describe("Source folder. Default: inbox"),
-          action: z.enum(["move", "delete"]).describe("move = move to targetFolder; delete = delete"),
+          action: z.enum(["move", "delete"]).describe("move = move to targetFolder; delete = move to Deleted Items"),
           targetFolder: z.string().optional().describe("Required when action = move"),
-          permanent: z.boolean().default(false).describe("With action = delete: permanent deletion"),
-          dryRun: z.boolean().default(false).describe("true = count only, change nothing"),
+          dryRun: z.boolean().default(true).describe("Default true: count only, change nothing. false = act, once the user has confirmed."),
         })
         .strict(),
-      outputSchema: z.object({ matched: z.number(), dryRun: z.boolean(), succeeded: z.number(), failed: z.array(z.object({ id: z.string(), error: z.string() })) }),
+      outputSchema: z.object({
+        matched: z.number().describe(`Messages acted on, or that would be with a dry run (at most ${BULK_LIMIT_TEXT})`),
+        capped: z.boolean().describe(`true when the sender has more than ${BULK_LIMIT_TEXT} messages in the folder`),
+        dryRun: z.boolean(),
+        succeeded: z.number(),
+        failed: z.array(z.object({ id: z.string(), error: z.string() })),
+        moved: z.array(z.object({ id: z.string(), newId: z.string() })).optional(),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
-    async ({ from, folder, action, targetFolder, permanent, dryRun }) =>
+    async ({ from, folder, action, targetFolder, dryRun }) =>
       run(async () => {
-        if (action === "move" && !targetFolder) throw new Error("`targetFolder` is required when action = move.");
-        const ids = await mail.idsFromSender(from, folder);
-        if (dryRun || ids.length === 0) {
-          return ok(`${ids.length} message(s) from ${from} in "${folder ?? "inbox"}".${dryRun ? " Nothing changed (dryRun)." : ""}`, { matched: ids.length, dryRun, succeeded: 0, failed: [] });
+        const r = await mail.bulkBySender({ from, folder, action, targetFolder, dryRun });
+        const verb = action === "move" ? `moved to "${targetFolder}"` : "moved to Deleted Items";
+        const where = `${r.matched} message(s) from ${from} in "${folder ?? "inbox"}"`;
+        if (r.matched === 0) return ok(`${where}. Nothing to do.`, { matched: 0, capped: false, dryRun: r.dryRun, succeeded: 0, failed: [] });
+        if (r.dryRun) {
+          const cap = r.capped ? ` ${CAPPED} a run acts on ${BULK_LIMIT_TEXT} of them, then call again for the rest.` : "";
+          return ok(`${where} would be ${verb}. Nothing changed (dry run): once the user confirms, call again with dryRun: false.${cap}`, {
+            matched: r.matched,
+            capped: r.capped,
+            dryRun: true,
+            succeeded: 0,
+            failed: [],
+          });
         }
-        const outcomes = action === "move" ? await mail.move(ids, targetFolder!) : await mail.delete(ids, permanent);
         mail.invalidateSummaries();
-        const verb = action === "move" ? `moved to "${targetFolder}"` : permanent ? "permanently deleted" : "moved to Deleted Items";
-        const s = summarizeOutcomes(outcomes, verb);
-        return ok(`${ids.length} message(s) from ${from}: ${s.text}`, { matched: ids.length, dryRun: false, ...s.structured });
+        const s = summarizeOutcomes(r.outcomes, verb);
+        const cap = r.capped ? ` ${CAPPED} call again for the rest.` : "";
+        return ok(`${r.matched} message(s) from ${from}: ${s.text}${cap}`, { matched: r.matched, capped: r.capped, dryRun: false, ...s.structured });
       }),
   );
 
@@ -128,7 +165,8 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
         from: z.string(),
         subject: z.string(),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      // Destructive: unsubscribing acts at the sender, and Mail-MCP cannot undo it.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ id }) =>
       run(async () => {
