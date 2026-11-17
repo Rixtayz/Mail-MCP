@@ -1,0 +1,14 @@
+{
+  "name": "mail-mcp",
+  "displayName": "Mail-MCP",
+  "version": "0.2.2",
+  "description": "Triage a personal Outlook mailbox (Outlook.com, Hotmail, Live, MSN) with Claude: search, read, file, delete and unsubscribe from newsletters. Runs on your computer and never sends email.",
+  "author": {
+    "name": "Rixtayz",
+    "url": "https://github.com/Rixtayz"
+  },
+  "homepage": "https://github.com/Rixtayz/Mail-MCP",
+  "repository": "https://github.com/Rixtayz/Mail-MCP",
+  "license": "MIT",
+  "keywords": ["outlook", "personal outlook", "hotmail", "email", "inbox", "unsubscribe", "newsletter"]
+}

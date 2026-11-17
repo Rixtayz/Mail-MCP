@@ -42,11 +42,12 @@ Security problems go through [SECURITY.md](SECURITY.md) rather than a public iss
 
 Pushing a tag publishes to npm from GitHub Actions, with provenance, and creates the GitHub release with the Claude Desktop bundle attached.
 
-1. Bump the version in `package.json`, in both `version` fields of `server.json` and in `mcpb/manifest.json`, then run `npm install --package-lock-only`.
+1. Bump the version in `package.json`, in both `version` fields of `server.json`, in `mcpb/manifest.json`, and in the Claude plugin: `version` in `plugin/.claude-plugin/plugin.json` and the pinned package in `plugin/.mcp.json`. Then run `npm install --package-lock-only`. A test checks that all of them agree.
 2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## [X.Y.Z] - date` heading. The release notes are taken from that section.
 3. Commit, then tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin main vX.Y.Z`.
 4. The **Release** workflow checks the tag against `package.json` and that `CHANGELOG.md` has a non-empty section for the version, publishes `@rixtay/mail-mcp` to npm (typecheck, tests and build run first) and creates the GitHub release with `mail-mcp-X.Y.Z.mcpb`. If the `bundle` job fails after `npm` has published, use "Re-run failed jobs", not "Re-run all jobs": re-running all jobs would retry the publish, which fails because the version already exists.
 5. Run **Publish to MCP Registry** from the Actions tab. It checks that `server.json` matches the version now on npm, then publishes through GitHub OIDC.
+6. The Claude plugin directory picks up the new commit on `main` and scans it. The plugin pins the npm version, so it starts working once step 4 has published that version.
 
 ### One-time npm setup
 

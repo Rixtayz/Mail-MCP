@@ -28,6 +28,13 @@ describe("release metadata", () => {
     expect(manifest.version).toBe(pkg.version);
   });
 
+  it("keeps the Claude plugin on the same release and pins the server to it", () => {
+    const plugin = read("plugin/.claude-plugin/plugin.json");
+    const mcp = read("plugin/.mcp.json");
+    expect(plugin.version).toBe(pkg.version);
+    expect(mcp.mcpServers.mail).toEqual({ command: "npx", args: ["-y", `${pkg.name}@${pkg.version}`] });
+  });
+
   it("lists exactly the server's tools in the bundle manifest", () => {
     const names = manifest.tools.map((t: { name: string }) => t.name);
     expect([...names].sort()).toEqual([...TOOLS].sort());

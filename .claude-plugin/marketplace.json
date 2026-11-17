@@ -1,0 +1,17 @@
+{
+  "name": "rixtayz-mail-mcp",
+  "owner": {
+    "name": "Rixtayz",
+    "url": "https://github.com/Rixtayz"
+  },
+  "metadata": {
+    "description": "Mail-MCP: Claude for your personal Outlook mailbox."
+  },
+  "plugins": [
+    {
+      "name": "mail-mcp",
+      "source": "./plugin",
+      "description": "Triage a personal Outlook mailbox (Outlook.com, Hotmail, Live, MSN) with Claude: search, read, file, delete and unsubscribe from newsletters. Runs on your computer and never sends email."
+    }
+  ]
+}

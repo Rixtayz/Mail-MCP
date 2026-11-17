@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- A Claude plugin (`plugin/`) for Claude Code and Cowork: the Mail-MCP server, pinned to the released npm version, plus an `inbox-cleanup` skill that has Claude review senders first, confirm with you, dry-run bulk actions and ignore instructions written inside emails. Claude Code users can install it with `/plugin install mail-mcp --marketplace Rixtayz/Mail-MCP`.
+
 ## [0.2.2] - 2026-11-17
 
 ### Changed
