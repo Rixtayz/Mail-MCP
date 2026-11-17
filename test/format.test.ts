@@ -124,6 +124,12 @@ describe("bodyToText drops content hidden from the reader", () => {
     ["a system font inside font-size:0", '<td style="font-size:0"><span style="font:caption">SHOWN</span></td>'],
     ["four normal keywords before the size, inside font-size:0", '<td style="font-size:0"><span style="font:normal normal normal normal 14px a">SHOWN</span></td>'],
     ["an oblique angle in the font shorthand, inside font-size:0", '<td style="font-size:0"><span style="font:oblique 10deg 14px a">SHOWN</span></td>'],
+    // Modern newsletters size text with clamp() or calc(): outside a zero size, a function is a visible size.
+    ["font-size:clamp()", '<p style="font-size:clamp(14px,2vw,16px)">SHOWN</p>'],
+    ["font-size:calc()", '<p style="font-size:calc(1rem + 2px)">SHOWN</p>'],
+    ["a font shorthand with a clamp() size", '<p style="font:bold clamp(14px, 2vw, 16px)/1.5 Arial, sans-serif">SHOWN</p>'],
+    // Accepted residual: a custom property is not resolved, so a var() font size reads as visible.
+    ["font-size:var(--z) with --z:0 (accepted residual)", '<span style="--z:0;font-size:var(--z)">SHOWN</span>'],
     ["font:inherit under a visible size", '<td style="font-size:14px"><span style="font:inherit">SHOWN</span></td>'],
     ["opacity:0, then opacity:1", '<div style="opacity:0;opacity:1">SHOWN</div>'],
     ["font-size:0, then font-size:14px", '<span style="font-size:0;font-size:14px">SHOWN</span>'],
@@ -244,9 +250,13 @@ describe("bodyToText keeps hidden content hidden when a later declaration is not
     ["font:var(--x), inside font-size:0", '<td style="font-size:0"><span style="font:var(--x)">SECRET</span></td>'],
     ["font:inherit, inside font-size:0", '<td style="font-size:0"><span style="font:inherit">SECRET</span></td>'],
     ["all:inherit after a visible size, inside font-size:0", '<td style="font-size:0"><span style="font-size:14px;all:inherit">SECRET</span></td>'],
-    // A custom property can carry a hiding value: a var() counts as hiding.
+    // A custom property can carry a hiding value: on display, visibility, opacity and height, a function counts as hiding.
     ["display:var(--d) with --d:none", '<div style="--d:none;display:var(--d)">SECRET</div>'],
-    ["font-size:var(--z) with --z:0", '<span style="--z:0;font-size:var(--z)">SECRET</span>'],
+    // On font-size, a function is not a reset under a zero size, and does not override a zero size.
+    ["font-size:clamp() inside font-size:0", '<td style="font-size:0"><p style="font-size:clamp(14px,2vw,16px)">SECRET</p></td>'],
+    ["a font shorthand with a clamp() size inside font-size:0", '<td style="font-size:0"><p style="font:clamp(14px,2vw,16px)/1.5 Arial">SECRET</p></td>'],
+    ["font-size:0, then font-size:clamp() !important", '<span style="font-size:0;font-size:clamp(14px,2vw,16px) !important">SECRET</span>'],
+    ["a font shorthand of zero size with a var() family", '<span style="--f:a;font:0/0 var(--f)">SECRET</span>'],
   ])("%s", (_, hidden) => {
     const t = html(`<p>Before</p>${hidden}<p>After</p>`);
     expect(t).toBe("Before\n\nAfter");

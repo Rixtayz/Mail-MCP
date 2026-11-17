@@ -126,8 +126,11 @@ const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "scrip
 // max-height with clipping overflow) hides as soon as it plausibly could, and a later declaration
 // of the same property shows the content again only when its whole value is plainly valid, from a
 // short allowlist. Anything else, an unknown or vendor keyword, a keyword combination, a function,
-// a trailing dot, a sign, is ignored, so hidden content stays hidden. A function, var() included,
-// counts as hiding: a custom property can carry `none` or `0`.
+// a trailing dot, a sign, is ignored, so hidden content stays hidden. On display, visibility,
+// opacity, height and overflow, a function, var() included, counts as hiding: a custom property
+// can carry `none` or `0`. A font size given by a function, such as clamp() or calc(), which
+// modern newsletters use, counts as visible instead, unless the element is under a zero size or
+// has a zero size declared too; so a var() carrying a zero size is not caught (accepted).
 
 /** One declaration of an inline style: lower-case property and value, whitespace collapsed, without `!important`. */
 interface Declaration {
@@ -188,8 +191,12 @@ function declarations(style: string): Declaration[] {
 
 /** What a declaration does: hides, shows (back), takes the parent's value, or nothing (ignored). */
 type Effect = "hide" | "show" | "inherit" | undefined;
-/** What a font size does: zero, a visible size, a size relative to the parent's, or the parent's size. */
-type Size = "zero" | "reset" | "relative" | "inherit" | undefined;
+/**
+ * What a font size does: zero, a visible size, a size relative to the parent's, the parent's size,
+ * or a function (clamp(), calc(), var()...): visible, except under a zero size, and it never
+ * overrides a zero size declared on the same element.
+ */
+type Size = "zero" | "reset" | "relative" | "inherit" | "function" | undefined;
 
 /** A plainly valid positive number, and length or percentage. */
 const PLAIN_NUMBER = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
@@ -254,7 +261,8 @@ function overflow(v: string, max: number): Effect {
 }
 
 function fontSize(v: string): Size {
-  if (isFunction(v) || ZERO.test(v)) return "zero";
+  if (isFunction(v)) return "function";
+  if (ZERO.test(v)) return "zero";
   if (INHERIT.test(v)) return "inherit";
   if (ABSOLUTE_SIZE.test(v) || (ABSOLUTE_LENGTH.test(v) && positive(v))) return "reset";
   if (v === "smaller" || v === "larger" || (PLAIN_LENGTH.test(v) && positive(v))) return "relative";
@@ -265,9 +273,9 @@ function fontSize(v: string): Size {
  * The size the `font` shorthand sets, when it parses strictly: style, variant, weight and stretch
  * keywords, each at most once, or `normal`, four at most; the size; an optional /line-height (a
  * plain number, length or percentage, or `normal`); then the family, quoted or made of names.
+ * With a function anywhere, it is a zero size when the size reads as zero, a function size otherwise.
  */
 function fontShorthand(v: string): Size {
-  if (isFunction(v)) return "zero";
   if (INHERIT.test(v)) return "inherit";
   if (v === "initial" || SYSTEM_FONT.test(v)) return "reset";
   const tokens = v
@@ -275,16 +283,19 @@ function fontShorthand(v: string): Size {
     .replace(/\boblique (?:\d+(?:\.\d+)?|\.\d+)deg\b/, "oblique")
     .split(" ");
   const seen = new Set<string>();
+  let repeated = false;
   let i = 0;
   for (; i < 4 && i < tokens.length; i++) {
     const t = tokens[i]!;
     const kind =
       t === "normal" ? "" : t === "italic" || t === "oblique" ? "style" : t === "small-caps" ? "variant" : FONT_WEIGHT.test(t) ? "weight" : FONT_STRETCH.test(t) ? "stretch" : undefined;
     if (kind === undefined) break;
-    if (kind && seen.has(kind)) return undefined;
+    if (kind && seen.has(kind)) repeated = true;
     seen.add(kind);
   }
   const [size = "", lineHeight, extra] = (tokens[i] ?? "").split("/");
+  if (isFunction(v)) return ZERO.test(size) ? "zero" : "function";
+  if (repeated) return undefined;
   if (extra !== undefined) return undefined;
   if (lineHeight !== undefined && lineHeight !== "normal" && !ZERO.test(lineHeight) && !PLAIN_NUMBER.test(lineHeight) && !PLAIN_LENGTH.test(lineHeight)) return undefined;
   if (!FONT_FAMILY.test(tokens.slice(i + 1).join(" "))) return undefined;
@@ -305,7 +316,9 @@ interface StyleEffect {
 function styleEffect(style: unknown): StyleEffect {
   const winners = new Map<string, { effect: string; important: boolean }>();
   const set = (key: string, effect: string | undefined, important: boolean): void => {
-    if (effect === undefined || (winners.get(key)?.important && !important)) return;
+    const current = winners.get(key);
+    if (effect === undefined || (current?.important && !important)) return;
+    if (effect === "function" && current?.effect === "zero") return; // a function size never undoes a zero size
     winners.set(key, { effect, important });
   };
   for (const d of typeof style === "string" ? declarations(style) : []) {
@@ -360,6 +373,7 @@ function fontSizeZero(el: DomNode, style: StyleEffect, inherited: boolean): bool
       return false;
     case "relative":
     case "inherit":
+    case "function": // visible, except under a zero size
       return inherited;
     default: {
       const attribs = (el.attribs ?? {}) as Record<string, string | undefined>;
