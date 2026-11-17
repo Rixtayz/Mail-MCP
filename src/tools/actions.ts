@@ -111,8 +111,9 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
       description:
         "Try to unsubscribe from the mailing list of a message, in order: (1) RFC 8058 one-click HTTPS POST (`method: \"one-click\"`, done); " +
         "(2) otherwise `method: \"browser\"` with the https URL to open in a browser, plus `mailtoUrl` when the sender also lists an email address; " +
-        "(3) `method: \"mailto\"` when the sender only accepts email: `mailtoUrl` is a link that opens a pre-filled message in the user's own mail app, and the user presses Send; " +
-        "(4) `method: \"blocked\"` when the link points to this computer or the local network, is not encrypted (http), or could not be checked: " +
+        "(3) `method: \"mailto\"` when email is the only usable way (no link, or only a plain http link, which is never opened): " +
+        "`mailtoUrl` is a link that opens a pre-filled message in the user's own mail app, and the user presses Send; " +
+        "(4) `method: \"blocked\"` when the link points to this computer or the local network, could not be checked, or is plain http with no email address to use instead: " +
         "nothing was opened and no link is returned; tell the user what `detail` says, and treat a link to the local network as a sign of a suspicious message; " +
         "(5) `method: \"none\"` when no header exists. This tool never sends email. " +
         "Deletes nothing. Preferably pass the `lastMessageId` returned by mail_senders_summary.",

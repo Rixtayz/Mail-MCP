@@ -93,6 +93,12 @@ describe("parseListUnsubscribe", () => {
     expect(info.mailtoSubject).toBe(("StopBcc: v@y.example" + "s".repeat(300)).slice(0, 200));
     expect(info.mailtoBody).toBe(("a[2Jb" + "b".repeat(2000)).slice(0, 1000));
   });
+
+  it("keeps line breaks in the raw mailto body, as CRLF", () => {
+    const body = encodeURIComponent("one\ntwo\r\nthree\rfour\u0000");
+    const info = parseListUnsubscribe([h("List-Unsubscribe", `<mailto:stop@x.example?subject=s&body=${body}>`)]);
+    expect(info.mailtoBody).toBe("one\r\ntwo\r\nthree\r\nfour");
+  });
 });
 
 /** Fake DNS: every hostname resolves to a public address. */
@@ -270,13 +276,11 @@ describe("oneClickPost destination guard", () => {
     "https://[ff02::1]/u",
     "https://[::ffff:127.0.0.1]/u",
     "https://[::ffff:192.168.1.1]/u",
-    "https://[64:ff9b::808:808]/u",
-    "https://[64:ff9b::7f00:1]/u",
-    "https://[64:ff9b:1::808:808]/u",
-    "https://[2002:808:808::1]/u",
-    "https://[2002:c0a8:101::1]/u",
-    "https://[::ffff:0:808:808]/u",
-    "https://[::ffff:0:a00:1]/u",
+    "https://[64:ff9b::7f00:1]/u", // NAT64 of 127.0.0.1
+    "https://[64:ff9b::c0a8:101]/u", // NAT64 of 192.168.1.1
+    "https://[64:ff9b:1::808:808]/u", // local-use NAT64, whatever it carries
+    "https://[2002:c0a8:101::1]/u", // 6to4 of 192.168.1.1
+    "https://[::ffff:0:a00:1]/u", // IPv4-translated 10.0.0.1
   ])("refuses %s without sending anything", async (url) => {
     const { request, attempts } = fakeRequest(200);
     const r = await oneClickPost(url, { resolveHost: publicDns, request });
@@ -350,6 +354,9 @@ describe("oneClickPost destination guard", () => {
     ["https://[2606:4700:4700::1111]/u", "2606:4700:4700::1111"],
     ["https://[2003::1]/u", "2003::1"],
     ["https://[64:ff9c::1]/u", "64:ff9c::1"],
+    ["https://[64:ff9b::5db8:d70e]/u", "64:ff9b::5db8:d70e"], // NAT64 of 93.184.215.14
+    ["https://[2002:5db8:d70e::1]/u", "2002:5db8:d70e::1"], // 6to4 of 93.184.215.14
+    ["https://[::ffff:0:5db8:d70e]/u", "::ffff:0:5db8:d70e"], // IPv4-translated 93.184.215.14
   ])("posts to the public address %s", async (url, host) => {
     const { request, sent } = fakeRequest(200);
     const r = await oneClickPost(url, { resolveHost: publicDns, request });
@@ -357,6 +364,16 @@ describe("oneClickPost destination guard", () => {
     expect(sent[0]?.connectedTo).toEqual([host]);
     expect(r.ok).toBe(true);
   });
+
+  it.each(["64:ff9b::5db8:d70e", "2002:5db8:d70e::1", "::ffff:0:5db8:d70e"])(
+    "posts to a hostname that resolves to %s, which carries a public IPv4 address",
+    async (address) => {
+      const { request, sent } = fakeRequest(200);
+      const r = await oneClickPost("https://news.example/u", { resolveHost: async () => [{ address }], request });
+      expect(sent[0]?.connectedTo).toEqual([address]);
+      expect(r.ok).toBe(true);
+    },
+  );
 });
 
 describe("embeddedIPv4", () => {
@@ -395,6 +412,13 @@ describe("buildMailtoUrl", () => {
     expect(buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "\r\n", mailtoBody: "\u0000" })).toBe(
       "mailto:stop@x.example?subject=unsubscribe",
     );
+  });
+  it("keeps line breaks in the body, encoded as CRLF, and never cuts one in half at the limit", () => {
+    expect(buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoSubject: "a\nb", mailtoBody: "one\ntwo\r\nthree\rfour" })).toBe(
+      "mailto:stop@x.example?subject=ab&body=one%0D%0Atwo%0D%0Athree%0D%0Afour",
+    );
+    const url = buildMailtoUrl({ oneClick: false, mailto: "stop@x.example", mailtoBody: "b".repeat(999) + "\nzzz" })!;
+    expect(new URLSearchParams(url.split("?")[1]).get("body")).toBe("b".repeat(999));
   });
   it("carries only address, subject and body from a hostile header", () => {
     const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<mailto:stop@x.example?cc=victim@y.example&bcc=v2@y.example&to=v3@y.example&subject=s>" }]);

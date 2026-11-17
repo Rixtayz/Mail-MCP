@@ -54,6 +54,7 @@ export type UnsubscribeMethod = "one-click" | "mailto" | "browser" | "blocked" |
 const LOCAL_LINK =
   "This unsubscribe link points to this computer or the local network, which a real newsletter never does. It was not opened. Treat this message as suspicious.";
 const HTTP_LINK = "This unsubscribe link is not encrypted (http) and was not opened.";
+const MAILTO_HOWTO = "Mail-MCP never sends email: give the user this link. It opens a pre-filled message in their own mail app, and they press Send.";
 
 function blockedDetail(refusal: Refusal): string {
   return refusal.reason === "non-public" ? LOCAL_LINK : `This unsubscribe link could not be checked (${refusal.why}), so it was not opened.`;
@@ -328,30 +329,32 @@ export class MailService {
     const base = { from: m.from?.emailAddress?.address ?? "", subject: m.subject ?? "" };
 
     // A link is only ever POSTed to or handed to the browser once its host is known to be public.
-    // A blocked answer carries no link at all, not even the mailto one: the message is not to be trusted.
+    // A link to a non-public host, or one that cannot be checked, blocks everything, the mailto link
+    // included: the message is not to be trusted. A plain http link is simply not used.
+    const httpOnly = !!info.https && !/^https:\/\//i.test(info.https);
+    const link = httpOnly ? undefined : info.https;
     let oneClickFailure: string | undefined;
-    if (info.https) {
-      if (!/^https:\/\//i.test(info.https)) return { ...base, method: "blocked", ok: false, detail: HTTP_LINK };
+    if (link) {
       let refusal: Refusal | undefined;
       if (info.oneClick) {
-        const r = await oneClickPost(info.https, this.unsubscribeNetwork);
-        if (r.ok) return { ...base, method: "one-click", ok: true, url: info.https, detail: r.detail };
+        const r = await oneClickPost(link, this.unsubscribeNetwork);
+        if (r.ok) return { ...base, method: "one-click", ok: true, url: link, detail: r.detail };
         refusal = r.refusal;
         oneClickFailure = r.detail;
       } else {
-        refusal = await checkUnsubscribeLink(info.https, this.unsubscribeNetwork.resolveHost);
+        refusal = await checkUnsubscribeLink(link, this.unsubscribeNetwork.resolveHost);
       }
       if (refusal) return { ...base, method: "blocked", ok: false, detail: blockedDetail(refusal) };
     }
     // Built only once one-click is out of the picture: nothing about the mailto link can stand in its way.
     const mailtoUrl = buildMailtoUrl(info);
     const mailtoFields = info.mailto && mailtoUrl ? { mailto: info.mailto, mailtoUrl } : {};
-    if (info.https) {
+    if (link) {
       return {
         ...base,
         method: "browser",
         ok: false,
-        url: info.https,
+        url: link,
         ...mailtoFields,
         detail: oneClickFailure ?? "No one-click support: open this URL in a browser and confirm the unsubscribe.",
       };
@@ -362,10 +365,12 @@ export class MailService {
         method: "mailto",
         ok: false,
         ...mailtoFields,
-        detail:
-          "This sender only accepts unsubscribe requests by email. Mail-MCP never sends email: give the user this link. It opens a pre-filled message in their own mail app, and they press Send.",
+        detail: httpOnly
+          ? `${HTTP_LINK} The sender also accepts unsubscribe requests by email. ${MAILTO_HOWTO}`
+          : `This sender only accepts unsubscribe requests by email. ${MAILTO_HOWTO}`,
       };
     }
+    if (httpOnly) return { ...base, method: "blocked", ok: false, detail: HTTP_LINK };
     return {
       ...base,
       method: "none",

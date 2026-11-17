@@ -30,6 +30,10 @@ const LONE_SURROGATE = /\p{Cs}/u;
 const FORMAT_CHAR = /\p{Cf}/u;
 /** Control characters, C0 and C1, including CR, LF and TAB. */
 const CONTROL_CHARS = /\p{Cc}/gu;
+/** Control characters other than CR and LF. */
+const CONTROL_CHARS_BUT_LINE_BREAKS = /[^\P{Cc}\r\n]/gu;
+/** A line break: CRLF, LF or CR. */
+const LINE_BREAK = /\r\n|\r|\n/g;
 
 /**
  * True for one plain address: no list separator, whitespace, control or URI/header delimiter,
@@ -62,6 +66,15 @@ function cleanText(s: string, max: number): string {
   return cut(s.replace(CONTROL_CHARS, ""), max);
 }
 
+/**
+ * A mailto body: line breaks kept, as CRLF (RFC 6068), every other control character removed,
+ * cut to at most `max` UTF-16 units without splitting a CRLF.
+ */
+function cleanBody(s: string, max: number): string {
+  const out = cut(s.replace(CONTROL_CHARS_BUT_LINE_BREAKS, "").replace(LINE_BREAK, "\r\n"), max);
+  return out.endsWith("\r") ? out.slice(0, -1) : out;
+}
+
 function parseMailto(uri: string): { address: string; subject?: string; body?: string } | undefined {
   if (!/^mailto:/i.test(uri)) return undefined;
   const rest = uri.slice("mailto:".length);
@@ -75,14 +88,14 @@ function parseMailto(uri: string): { address: string; subject?: string; body?: s
   if (!isSingleAddress(address)) return undefined;
   const params = new URLSearchParams(query);
   const subject = cleanText(params.get("subject") ?? "", MAILTO_SUBJECT_MAX);
-  const body = cleanText(params.get("body") ?? "", MAILTO_BODY_MAX);
+  const body = cleanBody(params.get("body") ?? "", MAILTO_BODY_MAX);
   return { address, ...(subject ? { subject } : {}), ...(body ? { body } : {}) };
 }
 
 /**
  * Parse List-Unsubscribe / List-Unsubscribe-Post headers into structured info. An https link
- * wins over an http one; the mailto subject and body come without control characters, capped
- * at 200 and 1000 characters.
+ * wins over an http one; the mailto subject and body come without control characters (the body
+ * keeps its line breaks, as CRLF), capped at 200 and 1000 characters.
  */
 export function parseListUnsubscribe(headers: GraphHeader[] | undefined): UnsubscribeInfo {
   const lu = header(headers, "List-Unsubscribe");
@@ -122,17 +135,17 @@ function encodeCut(s: string, max = Number.POSITIVE_INFINITY): string {
 /**
  * A `mailto:` link the user can open in their own mail app, built from the header's
  * address, subject and body only. Any other field the sender put in the header (cc, bcc, to)
- * is dropped, control characters are removed from the subject and body, and everything is
- * percent-encoded so nothing can add a query parameter.
+ * is dropped, control characters are removed from the subject and from the body (whose line
+ * breaks are kept, as CRLF), and everything is percent-encoded so nothing can add a query parameter.
  * Never throws, whatever the sender put in the header.
  */
 export function buildMailtoUrl(info: UnsubscribeInfo): string | undefined {
   if (!info.mailto) return undefined;
   const address = encodeCut(info.mailto).replace(/%40/g, "@");
   const subject = (info.mailtoSubject ?? "").replace(CONTROL_CHARS, "") || "unsubscribe";
-  const body = (info.mailtoBody ?? "").replace(CONTROL_CHARS, "");
+  const body = cleanBody(info.mailtoBody ?? "", MAILTO_BODY_MAX);
   const query = [`subject=${encodeCut(subject, MAILTO_SUBJECT_MAX)}`];
-  if (body) query.push(`body=${encodeCut(body, MAILTO_BODY_MAX)}`);
+  if (body) query.push(`body=${encodeCut(body)}`);
   return `mailto:${address}?${query.join("&")}`;
 }
 
@@ -144,7 +157,10 @@ const lookupAll: HostResolver = (hostname) => lookup(hostname, { all: true });
 /**
  * Addresses an email must not make this machine connect to, or the browser open: this host,
  * its local network and other non-public ranges. BlockList also matches IPv4-mapped IPv6
- * addresses (::ffff:a.b.c.d) against the IPv4 rules.
+ * addresses (::ffff:a.b.c.d) against the IPv4 rules. NAT64 (64:ff9b::/96), 6to4 and
+ * IPv4-translated addresses are not listed: they are judged by the IPv4 address they carry
+ * (see `isNonPublic`), since on an IPv6-only network with DNS64 every host resolves to a
+ * 64:ff9b:: address.
  */
 const NON_PUBLIC = new BlockList();
 for (const [net, prefix] of [
@@ -161,10 +177,7 @@ for (const [net, prefix] of [
 ] as const) NON_PUBLIC.addSubnet(net, prefix, "ipv4");
 for (const [net, prefix] of [
   ["::", 96], // unspecified, loopback and deprecated IPv4-compatible
-  ["::ffff:0:0:0", 96], // IPv4-translated (SIIT)
-  ["64:ff9b::", 96], // NAT64, well-known prefix
-  ["64:ff9b:1::", 48], // NAT64, local-use prefix
-  ["2002::", 16], // 6to4
+  ["64:ff9b:1::", 48], // NAT64, local-use prefix: only reaches a local network's translator
   ["fc00::", 7], // unique local
   ["fe80::", 10], // link-local
   ["fec0::", 10], // deprecated site-local
@@ -209,6 +222,7 @@ export function embeddedIPv4(address: string): string | undefined {
   return undefined;
 }
 
+/** True when `address` is in a non-public range, or is a NAT64, 6to4 or IPv4-translated address carrying a non-public IPv4. */
 function isNonPublic(address: string): boolean {
   // Only scoped addresses (link-local, site-local) carry a zone id such as %eth0, and BlockList ignores them.
   if (address.includes("%")) return true;

@@ -231,9 +231,28 @@ describe("MailService.unsubscribe", () => {
   it.each([
     ["without", {}],
     ["with", { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }],
-  ])("blocks a plain http link %s List-Unsubscribe-Post", async (_label, post) => {
-    const { mail, posts } = service(() => message({ "List-Unsubscribe": "<http://x.example/u>, <mailto:stop@x.example>", ...post }));
+  ])("blocks a plain http link with no mailto %s List-Unsubscribe-Post", async (_label, post) => {
+    const { mail, posts } = service(() => message({ "List-Unsubscribe": "<http://x.example/u>", ...post }));
     expect(await mail.unsubscribe("m")).toEqual(blocked(HTTP_LINK));
+    expect(posts.attempts).toEqual([]);
+  });
+
+  it.each([
+    ["without", {}],
+    ["with", { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }],
+  ])("skips a plain http link for the mailto link %s List-Unsubscribe-Post", async (_label, post) => {
+    const { mail, posts } = service(() => message({ "List-Unsubscribe": "<http://x.example/u>, <mailto:stop@x.example>", ...post }));
+    const r = await mail.unsubscribe("m");
+    expect(r).toEqual({
+      method: "mailto",
+      ok: false,
+      mailto: "stop@x.example",
+      mailtoUrl: "mailto:stop@x.example?subject=unsubscribe",
+      detail:
+        "This unsubscribe link is not encrypted (http) and was not opened. The sender also accepts unsubscribe requests by email. Mail-MCP never sends email: give the user this link. It opens a pre-filled message in their own mail app, and they press Send.",
+      from: "news@x.example",
+      subject: "Promo",
+    });
     expect(posts.attempts).toEqual([]);
   });
 

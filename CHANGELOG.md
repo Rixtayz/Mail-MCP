@@ -10,9 +10,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Security
 
-- `mail_unsubscribe` never hands a link to this computer or the local network to the browser. When an unsubscribe link points there, directly or through its DNS name, it answers the new `method: "blocked"` with no link at all and says the message is suspicious; it used to suggest opening that link in a browser. Plain `http://` links and links whose host cannot be checked are blocked too, and an `https` link now wins over an `http` one listed before it.
-- The one-click unsubscribe POST connects only to an address that passed the check, so a DNS name that changes its answer between the check and the connection (DNS rebinding) cannot redirect it. NAT64, 6to4 and IPv4-translated addresses, `192.0.0.0/24` and `198.18.0.0/15` are refused as well, and the response body is no longer read.
-- A `mailto:` unsubscribe address holding an invisible formatting character, such as a right-to-left override, is ignored. Control characters are removed from the `mailto:` subject and body, which `mail_get_message` and `mail_senders_summary` now cap at 200 and 1,000 characters.
+- `mail_unsubscribe` never hands a link to this computer or the local network to the browser. When an unsubscribe link points there, directly or through its DNS name, it answers the new `method: "blocked"` with no link at all and says the message is suspicious; it used to suggest opening that link in a browser. Links whose host cannot be checked are blocked too. A plain `http://` link is never opened: the answer is the sender's `mailto:` link when there is one, `blocked` otherwise. An `https` link now wins over an `http` one listed before it.
+- The one-click unsubscribe POST connects only to an address that passed the check, so a DNS name that changes its answer between the check and the connection (DNS rebinding) cannot redirect it. `192.0.0.0/24`, `198.18.0.0/15` and the local-use NAT64 prefix `64:ff9b:1::/48` are refused as well, and NAT64, 6to4 and IPv4-translated addresses are refused when the IPv4 address they carry is non-public. The response body is no longer read.
+- A `mailto:` unsubscribe address holding an invisible formatting character, such as a right-to-left override, is ignored. Control characters are removed from the `mailto:` subject and body (the body keeps its line breaks, as CRLF), which `mail_get_message` and `mail_senders_summary` now cap at 200 and 1,000 characters.
 
 ## [0.2.2] - 2026-11-17
 
