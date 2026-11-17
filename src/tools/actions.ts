@@ -110,13 +110,15 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
       title: "Unsubscribe",
       description:
         "Try to unsubscribe from the mailing list of a message, in order: (1) RFC 8058 one-click HTTPS POST (`method: \"one-click\"`, done); " +
-        "(2) otherwise `method: \"browser\"` with the URL to open in a browser, plus `mailtoUrl` when the sender also lists an email address; " +
+        "(2) otherwise `method: \"browser\"` with the https URL to open in a browser, plus `mailtoUrl` when the sender also lists an email address; " +
         "(3) `method: \"mailto\"` when the sender only accepts email: `mailtoUrl` is a link that opens a pre-filled message in the user's own mail app, and the user presses Send; " +
-        "(4) `method: \"none\"` when no header exists. This tool never sends email. " +
+        "(4) `method: \"blocked\"` when the link points to this computer or the local network, is not encrypted (http), or could not be checked: " +
+        "nothing was opened and no link is returned; tell the user what `detail` says, and treat a link to the local network as a sign of a suspicious message; " +
+        "(5) `method: \"none\"` when no header exists. This tool never sends email. " +
         "Deletes nothing. Preferably pass the `lastMessageId` returned by mail_senders_summary.",
       inputSchema: z.object({ id: z.string().min(1).describe("Id of a representative message of the newsletter") }).strict(),
       outputSchema: z.object({
-        method: z.enum(["one-click", "mailto", "browser", "none"]),
+        method: z.enum(["one-click", "mailto", "browser", "blocked", "none"]),
         ok: z.boolean(),
         url: z.string().optional(),
         mailto: z.string().optional(),
@@ -136,7 +138,9 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
             ? `🌐 Browser action required for ${r.from}: ${r.url}`
             : r.method === "mailto"
               ? `✉️ Email needed for ${r.from}: ${r.mailtoUrl}`
-              : `⚠️ ${r.from}: ${r.method}`;
+              : r.method === "blocked"
+                ? `⛔ Unsubscribe link blocked for ${r.from}.`
+                : `⚠️ ${r.from}: ${r.method}`;
         return ok(`${head}\n${r.detail}`, { ...r });
       }),
   );

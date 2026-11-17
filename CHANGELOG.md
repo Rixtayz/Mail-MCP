@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - A Claude plugin (`plugin/`) for Claude Code and Cowork: the Mail-MCP server, pinned to the released npm version, plus an `inbox-cleanup` skill that has Claude review senders first, confirm with you, dry-run bulk actions and ignore instructions written inside emails. Claude Code users can install it with `/plugin install mail-mcp --marketplace Rixtayz/Mail-MCP`.
 
+### Security
+
+- `mail_unsubscribe` never hands a link to this computer or the local network to the browser. When an unsubscribe link points there, directly or through its DNS name, it answers the new `method: "blocked"` with no link at all and says the message is suspicious; it used to suggest opening that link in a browser. Plain `http://` links and links whose host cannot be checked are blocked too, and an `https` link now wins over an `http` one listed before it.
+- The one-click unsubscribe POST connects only to an address that passed the check, so a DNS name that changes its answer between the check and the connection (DNS rebinding) cannot redirect it. NAT64, 6to4 and IPv4-translated addresses, `192.0.0.0/24` and `198.18.0.0/15` are refused as well, and the response body is no longer read.
+- A `mailto:` unsubscribe address holding an invisible formatting character, such as a right-to-left override, is ignored. Control characters are removed from the `mailto:` subject and body, which `mail_get_message` and `mail_senders_summary` now cap at 200 and 1,000 characters.
+
 ## [0.2.2] - 2026-11-17
 
 ### Changed
