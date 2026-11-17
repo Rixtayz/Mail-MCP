@@ -42,9 +42,9 @@ export function registerSessionTools(server: McpServer, session: SessionService)
   server.registerTool(
     "mail_login",
     {
-      title: "Sign in to Outlook.com",
+      title: "Sign in to Outlook",
       description:
-        "Sign the user in to their Outlook.com mailbox. Call it when any other tool answers \"Not signed in\" or that the sign-in has expired. " +
+        "Sign the user in to their personal Outlook mailbox. Call it when any other tool answers \"Not signed in\" or that the sign-in has expired. " +
         "It opens a Microsoft sign-in page in the user's browser and waits for them to finish. If the result is \"pending\", ask the user to complete the sign-in in their browser, then call mail_login again. " +
         "It asks for access to read and organize mail only: it never asks for permission to send email. Safe to call when already signed in.",
       inputSchema: z.object({}).strict(),
@@ -75,7 +75,7 @@ export function registerSessionTools(server: McpServer, session: SessionService)
   server.registerTool(
     "mail_logout",
     {
-      title: "Sign out of Outlook.com",
+      title: "Sign out of Outlook",
       description:
         "Sign the user out: removes the sign-in stored on this computer. Mail tools stop working until mail_login is called again. " +
         "The result includes a link where the user can also withdraw Mail-MCP's access on Microsoft's side.",

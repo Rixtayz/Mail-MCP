@@ -19,7 +19,7 @@ export function registerFolderTools(server: McpServer, mail: MailService): void 
     {
       title: "List folders",
       description:
-        "List every folder of the Outlook.com mailbox with its path, total message count and unread count. " +
+        "List every folder of the personal Outlook mailbox with its path, total message count and unread count. " +
         "Call it before filing messages to learn which folders exist. Other tools accept a folder by display name (\"Invoices\"), " +
         "by path (\"Archive/2024\"), by well-known name (inbox, deleteditems, junkemail, archive) or by id.",
       inputSchema: z.object({}).strict(),

@@ -8,7 +8,7 @@
 
 ![Mail-MCP: AI-powered inbox control for Outlook](docs/hero.png)
 
-A small, focused [MCP](https://modelcontextprotocol.io) server that lets Claude (Claude Desktop, Cowork, Claude Code or any MCP client) work on a **personal Outlook.com / Hotmail / Live mailbox** through Microsoft Graph: read and search mail, file it into folders, delete it, and **unsubscribe from newsletters**. You install it, say "connect my Outlook", sign in with Microsoft in your browser, and that is all: no app registration, no terminal, no config file.
+A small, focused [MCP](https://modelcontextprotocol.io) server that lets Claude (Claude Desktop, Cowork, Claude Code or any MCP client) work on a **personal Outlook mailbox** (Outlook.com, Hotmail, Live or MSN address) through Microsoft Graph: read and search mail, file it into folders, delete it, and **unsubscribe from newsletters**. You install it, say "connect my Outlook", sign in with Microsoft in your browser, and that is all: no app registration, no terminal, no config file.
 
 Built for one job: clean up an overflowing personal inbox with an AI assistant, safely.
 
