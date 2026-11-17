@@ -158,12 +158,17 @@ function parseStyle(style: unknown): Style {
 
 const isZero = (value: string | undefined): boolean => value !== undefined && ZERO.test(value);
 
-/** True when an element is not shown at all, nor anything in it, whatever its descendants say. */
+/**
+ * True when an element is not shown at all, nor anything in it, whatever its descendants say.
+ * Two markers that look like hiding are deliberately not treated as such, since the user sees the
+ * content: `mso-hide:all` (only classic Outlook for Windows honours it; Outlook.com, the new Outlook
+ * and mobile show it, and bulletproof buttons put their link there) and `aria-hidden="true"`
+ * (it hides from screen readers only).
+ */
 function hiddenElement(el: DomNode, style: Style): boolean {
   if (HIDDEN_ELEMENTS.has(el.name ?? "")) return true;
-  const attribs = (el.attribs ?? {}) as Record<string, string | undefined>;
-  if (attribs.hidden !== undefined || attribs["aria-hidden"]?.trim().toLowerCase() === "true") return true;
-  if (style.get("display") === "none" || style.get("mso-hide") === "all") return true;
+  if ((el.attribs as Record<string, string | undefined> | undefined)?.hidden !== undefined) return true;
+  if (style.get("display") === "none") return true;
   const opacity = style.get("opacity");
   if (opacity !== undefined && /^[+-]?(?:\d+\.?\d*|\.\d+)%?$/.test(opacity) && Number.parseFloat(opacity) <= 0) return true;
   const clipped = OVERFLOW.some((p) => /\b(?:hidden|clip)\b/.test(style.get(p) ?? ""));

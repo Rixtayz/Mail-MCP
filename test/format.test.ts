@@ -61,11 +61,9 @@ describe("bodyToText drops content hidden from the reader", () => {
     ["a relative font size inside font-size:0", '<div style="font-size:0"><span style="font-size:1.5em">SECRET</span></div>'],
     ["max-height:0 with overflow:hidden", '<div style="max-height:0px; overflow:hidden">SECRET</div>'],
     ["height:0 with overflow:hidden", '<div style="HEIGHT:0;OVERFLOW:HIDDEN;">SECRET</div>'],
-    ["mso-hide:all", '<div style="mso-hide:all">SECRET</div>'],
     ["opacity:0", '<div style="opacity:0">SECRET</div>'],
     ["opacity: 0%", '<div style="opacity: 0%">SECRET</div>'],
     ["the hidden attribute", "<div hidden>SECRET</div>"],
-    ['aria-hidden="true"', '<div aria-hidden="TRUE">SECRET</div>'],
     ["template", "<template><p>SECRET</p></template>"],
     ["noscript", "<noscript><p>SECRET</p></noscript>"],
     ["script", "<script>var SECRET = 1;</script>"],
@@ -92,6 +90,10 @@ describe("bodyToText drops content hidden from the reader", () => {
     ["opacity:0.5", '<div style="opacity:0.5">SHOWN</div>'],
     ["a font size set inside a font-size:0 wrapper (MJML columns)", '<td style="font-size:0px"><div style="font-size:13px">SHOWN</div></td>'],
     ["visibility:visible inside visibility:hidden", '<div style="visibility:hidden">SECRET <span style="visibility:visible">SHOWN</span></div>'],
+    // Only classic Outlook for Windows honours mso-hide; Outlook.com, the new Outlook and mobile show the content.
+    ["mso-hide:all", '<a href="https://shop.example/sale" style="mso-hide:all">SHOWN</a>'],
+    // aria-hidden hides from screen readers only: a sighted reader sees the content.
+    ['aria-hidden="true"', '<div aria-hidden="true">SHOWN</div>'],
     ['aria-hidden="false"', '<div aria-hidden="false">SHOWN</div>'],
     ["display:none written in another attribute", '<div title="display:none" class="display:none">SHOWN</div>'],
     ["a property that only ends in display", '<div style="x-display:none">SHOWN</div>'],
@@ -107,7 +109,7 @@ describe("bodyToText drops content hidden from the reader", () => {
     );
   });
 
-  it("keeps a real table-based newsletter readable and drops its hidden preheader", () => {
+  it("keeps a real table-based newsletter readable, its mso-hide:all button and aria-hidden stars included, and drops its hidden preheader", () => {
     const newsletter = readFileSync(new URL("./fixtures/newsletter.html", import.meta.url), "utf8");
     expect(html(newsletter)).toBe(
       [
@@ -128,6 +130,8 @@ describe("bodyToText drops content hidden from the reader", () => {
         "",
         "Ridge 45 backpack",
         "45 litres with a rain cover in the lid. See the pack [https://shop.northwind.example/p/ridge-45]",
+        "",
+        "★★★★★ Rated 4.8 by 2,300 hikers",
         "",
         "Northwind Outdoor, 120 Harbour Street, Portland, OR 97201",
         "",
