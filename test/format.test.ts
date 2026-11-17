@@ -257,9 +257,110 @@ describe("bodyToText keeps hidden content hidden when a later declaration is not
     ["a font shorthand with a clamp() size inside font-size:0", '<td style="font-size:0"><p style="font:clamp(14px,2vw,16px)/1.5 Arial">SECRET</p></td>'],
     ["font-size:0, then font-size:clamp() !important", '<span style="font-size:0;font-size:clamp(14px,2vw,16px) !important">SECRET</span>'],
     ["a font shorthand of zero size with a var() family", '<span style="--f:a;font:0/0 var(--f)">SECRET</span>'],
+    // A literal zero size after a function (a weight or an oblique angle) is still a zero size.
+    ["a zero size after a calc() weight in the font shorthand", '<span style="font:calc(400) 0/0 a">SECRET</span>'],
+    ["a zero size after normal and a calc() weight in the font shorthand", '<span style="font:normal calc(400) 0 a">SECRET</span>'],
+    ["a zero size after a calc() oblique angle in the font shorthand", '<span style="font:oblique calc(10deg) 0 a">SECRET</span>'],
+    // display:table-column and table-column-group render no content.
+    ["display:table-column", '<div style="display:table-column">SECRET</div>'],
+    ["display:table-column-group", '<div style="display:table-column-group">SECRET</div>'],
+    ["display:none, then display:table-column", '<div style="display:none;display:table-column">SECRET</div>'],
   ])("%s", (_, hidden) => {
     const t = html(`<p>Before</p>${hidden}<p>After</p>`);
     expect(t).toBe("Before\n\nAfter");
+  });
+});
+
+describe("bodyToText shows hidden content again only from a plain ASCII declaration the split reads as CSS does (R14)", () => {
+  it.each([
+    // CSS trims only ASCII whitespace and folds only ASCII case: anything else makes the value unknown.
+    ["display:none, then display:block followed by a no-break space", '<div style="display:none;display:block&nbsp;">SECRET</div>'],
+    ["display:none, then a no-break space before block", '<div style="display:none;display:&nbsp;block">SECRET</div>'],
+    ["display:none, then a no-break space before the property", '<div style="display:none;&nbsp;display:block">SECRET</div>'],
+    ["display:none, then display:block followed by an ideographic space", '<div style="display:none;display:block&#x3000;">SECRET</div>'],
+    ["display:none, then display:block followed by a zero-width no-break space", '<div style="display:none;display:block&#xFEFF;">SECRET</div>'],
+    ["display:none, then an em space before block", '<div style="display:none;display:&#x2003;block">SECRET</div>'],
+    ["display:none, then display:block followed by a vertical tab", '<div style="display:none;display:block&#x0B;">SECRET</div>'],
+    ["display:none, then display:block with a no-break space inside !important", '<div style="display:none;display:block !&nbsp;important">SECRET</div>'],
+    ["display:none, then display:block spelled with a Kelvin sign", '<div style="display:none;display:bloc&#x212A;">SECRET</div>'],
+    ["display:none, then display:inline-block spelled with a Kelvin sign", '<div style="display:none;display:inline-bloc&#x212A;">SECRET</div>'],
+    ["opacity:0, then opacity:1 after a no-break space", '<div style="opacity:0;opacity:&nbsp;1">SECRET</div>'],
+    ["font-size:0, then font-size:14px after a no-break space", '<span style="font-size:0;font-size:&nbsp;14px">SECRET</span>'],
+    ["font-size:14px followed by a no-break space, inside font-size:0", '<td style="font-size:0"><span style="font-size:14px&nbsp;">SECRET</span></td>'],
+    ["a font shorthand with a no-break space before the family, inside font-size:0", '<td style="font-size:0"><span style="font:14px/1.5&nbsp;Arial">SECRET</span></td>'],
+    ["height:0 and overflow:hidden, then height:auto after a no-break space", '<div style="height:0;overflow:hidden;height:&nbsp;auto">SECRET</div>'],
+    ["height:0 and overflow:hidden, then overflow:visible followed by a no-break space", '<div style="height:0;overflow:hidden;overflow:visible&nbsp;">SECRET</div>'],
+    ["visibility:hidden, then visibility:visible after a no-break space", '<span style="visibility:hidden;visibility:&nbsp;visible">SECRET</span>'],
+    ["visibility:visible after a no-break space, inside visibility:hidden", '<div style="visibility:hidden"><span style="visibility:&nbsp;visible">SECRET</span></div>'],
+    // A [] or {} block holds its semicolons, as a quoted string or () does.
+    ["display:none, then display:block inside a [] block", '<div style="display:none;x:[;display:block;]">SECRET</div>'],
+    ["display:none, then display:block inside a {} block", '<div style="display:none;x:{;display:block;}">SECRET</div>'],
+    // A plain hiding declaration is found whatever comes before it.
+    ["display:none after a line feed inside a quoted string", "<div style=\"font-family:'x&#10;;display:none\">SECRET</div>"],
+    ["display:none after a line feed inside a double-quoted string", '<div style="font-family:&quot;x&#10;;display:none">SECRET</div>'],
+    ["display:none after a carriage return inside a quoted string", "<div style=\"font-family:'x&#13;;display:none\">SECRET</div>"],
+    ["display:none after a form feed inside a quoted string", "<div style=\"font-family:'x&#12;;display:none\">SECRET</div>"],
+    ["display:none after a quote inside an unquoted url()", "<div style=\"background:url(a');display:none\">SECRET</div>"],
+    ["display:none after a double quote inside an unquoted url()", '<div style="background:url(a&quot;);display:none">SECRET</div>'],
+    ["display:none after a parenthesis inside an unquoted url()", '<div style="background:url(a(b);display:none">SECRET</div>'],
+    ["display:none after a comment opener inside an unquoted url()", '<div style="background:url(/*);display:none">SECRET</div>'],
+    // After something the split cannot place the way CSS does, no later declaration shows again.
+    ["display:block after a comment opener in url() and a quote CSS opens", "<div style=\"background:url(/*);display:none;x:'*/);display:block\">SECRET</div>"],
+    ["display:block after a line feed in a string and a quote CSS opens", "<div style=\"font-family:'x&#10;;display:none;y:';display:block\">SECRET</div>"],
+    ["display:block after an escaped url() whose content CSS does not read", "<div style=\"display:none;x:\\75 rl(/*);y:'*/);display:block\">SECRET</div>"],
+    // The font shorthand: the line height is read strictly.
+    ...["0x", "0.", "0e", "0n"].map((lh): [string, string] => [
+      `font-size:0, then a font shorthand with line height ${lh}`,
+      `<span style="font-size:0;font:14px/${lh} a">SECRET</span>`,
+    ]),
+    ["a font shorthand with line height 0x, inside font-size:0", '<td style="font-size:0"><span style="font:14px/0x a">SECRET</span></td>'],
+    ["a font shorthand with line height 00foo, inside font-size:0", '<td style="font-size:0"><span style="font:14px/00foo a">SECRET</span></td>'],
+    // A reserved word is not a family name; nor is a generic family followed by more words.
+    ...["inherit", "initial", "unset", "default", "revert", "revert-layer", "serif x", "a, inherit", "inherit, a"].map((family): [string, string] => [
+      `font-size:0, then a font shorthand with the family ${family}`,
+      `<span style="font-size:0;font:14px ${family}">SECRET</span>`,
+    ]),
+    // An oblique angle beyond 90deg makes the shorthand invalid.
+    ["font-size:0, then a font shorthand with oblique 100deg", '<span style="font-size:0;font:oblique 100deg 14px a">SECRET</span>'],
+    ["font-size:0, then a font shorthand with oblique -100deg", '<span style="font-size:0;font:oblique -100deg 14px a">SECRET</span>'],
+  ])("%s", (_, hidden) => {
+    const t = html(`<p>Before</p>${hidden}<p>After</p>`);
+    expect(t).toBe("Before\n\nAfter");
+  });
+
+  it.each([
+    ["display:none, then display:block after a url() and a quoted semicolon", "<div style=\"display:none;background:url(x.png);font-family:'a;b';display:block\">SHOWN</div>"],
+    ["display:none, then display:block with ASCII whitespace around it", '<div style="display:none;&#9;display :&#10;block&#13; !important ">SHOWN</div>'],
+    ["display:none, then DISPLAY:BLOCK in capitals", '<div style="display:none;DISPLAY:BLOCK">SHOWN</div>'],
+    ["an oblique angle of 90deg in the font shorthand, inside font-size:0", '<td style="font-size:0"><span style="font:oblique 90deg 14px a">SHOWN</span></td>'],
+    ["a zero line height in the font shorthand, inside font-size:0", '<td style="font-size:0"><span style="font:14px/0 a">SHOWN</span></td>'],
+    ["a multi-word family in the font shorthand, inside font-size:0", '<td style="font-size:0"><span style="font:14px/1.5 Helvetica Neue, Arial">SHOWN</span></td>'],
+    ["a generic family after a family in the font shorthand, inside font-size:0", '<td style="font-size:0"><span style="font:14px a, serif">SHOWN</span></td>'],
+  ])("but keeps %s", (_, visible) => {
+    const t = html(`<p>Before</p>${visible}<p>After</p>`);
+    expect(t).toBe("Before\n\nSHOWN\n\nAfter");
+  });
+
+  it("keeps multilingual text whose style names a font outside ASCII", () => {
+    const t = html(
+      '<td style="font-size:0"><div style="font-family:\'微软雅黑\',sans-serif;font-size:14px">Café, 東京, مرحبا, שלום, नमस्ते 😀</div></td>',
+    );
+    expect(t).toBe("Café, 東京, مرحبا, שלום, नमस्ते 😀");
+  });
+});
+
+describe("bodyToText reads a style in linear time", () => {
+  const zeros = "0".repeat(100_000);
+  it.each([
+    ["font-size", `<span style="font-size:${zeros}!">x</span>`],
+    ["opacity", `<div style="opacity:${zeros}!">x</div>`],
+    ["height", `<div style="height:${zeros}!;overflow:hidden">x</div>`],
+    ["the size of the font shorthand", `<span style="font:${zeros}! a">x</span>`],
+    ["the line height of the font shorthand", `<span style="font:14px/${zeros}! a">x</span>`],
+  ])("100,000 zeros then ! in %s take well under 100 ms", (_, content) => {
+    const start = performance.now();
+    html(content);
+    expect(performance.now() - start).toBeLessThan(100);
   });
 });
 
@@ -285,6 +386,9 @@ describe("sanitizeText", () => {
   });
   it("also removes the combining grapheme joiner, Mongolian variation selectors and the rest of the U+E0000 block", () => {
     expect(sanitizeText("a\u034Fb\u180Bc\u{E0080}d\u{E0FFF}e")).toBe("abcde");
+  });
+  it("keeps Hangul fillers and the braille blank, which only a mailto address refuses", () => {
+    expect(sanitizeText("a\u115Fb\u1160c\u2800d\u3164e\uFFA0f")).toBe("a\u115Fb\u1160c\u2800d\u3164e\uFFA0f");
   });
 });
 
@@ -329,6 +433,12 @@ describe("summarizeMessage", () => {
 describe("frameUntrusted", () => {
   it("wraps the body in an untrusted email_content element, after one line saying it is data", () => {
     expect(frameUntrusted("Hello")).toBe(`${NOTICE}\n<email_content untrusted="true">\nHello\n</email_content>`);
+  });
+
+  it("frames a body with a long run of spaces after < in well under 100 ms", () => {
+    const start = performance.now();
+    frameUntrusted(`<${" ".repeat(100_000)}x`);
+    expect(performance.now() - start).toBeLessThan(100);
   });
 
   it("neutralises an email_content tag written inside the body", () => {
