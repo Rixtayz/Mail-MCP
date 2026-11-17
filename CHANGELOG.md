@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-17
+
+### Fixed
+
+- The Claude Desktop extension did not start: Claude Desktop refused its display name, "Mail-MCP (Outlook.com / Hotmail)", because of the slash ("path escape"). It is now "Mail-MCP (Outlook.com and Hotmail)".
+
 ## [0.2.0] - 2026-11-17
 
 ### Added
@@ -76,7 +82,8 @@ First public release.
 - Unsubscribe cascade: RFC 8058 one-click POST, then `mailto:`, then a URL for the assistant's browser.
 - Safe defaults: deletion moves to Deleted Items, `permanent: true` to purge, `dryRun` on bulk actions, MCP annotations on every tool.
 
-[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Rixtayz/Mail-MCP/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Rixtayz/Mail-MCP/compare/v0.1.0...v0.1.1
