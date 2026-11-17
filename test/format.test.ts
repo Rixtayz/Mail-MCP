@@ -52,7 +52,6 @@ describe("bodyToText drops content hidden from the reader", () => {
     ["DISPLAY:NONE; in capitals", '<div style="DISPLAY:NONE;">SECRET</div>'],
     ["display:none !important", '<span style="display : none !important">SECRET</span>'],
     ["a comment inside the declaration", '<span style="display:/* x */none">SECRET</span>'],
-    ["a CSS escape in the property name", '<span style="d\\69 splay:none">SECRET</span>'],
     ["an entity in the style attribute", '<span style="display&#58;none">SECRET</span>'],
     ["visibility:hidden", '<p style="visibility:hidden">SECRET</p>'],
     ["visibility: collapse", '<p style="visibility: collapse">SECRET</p>'],
@@ -114,7 +113,18 @@ describe("bodyToText drops content hidden from the reader", () => {
     ["a property that only ends in display", '<div style="x-display:none">SHOWN</div>'],
     // A later valid declaration does override an earlier hiding one.
     ["display:none, then display:block", '<div style="display:none;display:block">SHOWN</div>'],
-    ["display:none, then a two-keyword display", '<div style="display:none;display:inline flow-root">SHOWN</div>'],
+    ["display:none, then display:block !important", '<div style="display:none;display:block !important">SHOWN</div>'],
+    ["display:none, then display:revert", '<div style="display:none;display:revert">SHOWN</div>'],
+    ["opacity:0, then opacity:50%", '<div style="opacity:0;opacity:50%">SHOWN</div>'],
+    ["height:0 and overflow:hidden, then height:auto", '<div style="height:0;overflow:hidden;height:auto">SHOWN</div>'],
+    ["max-height:0 and overflow:hidden, then max-height:none", '<div style="max-height:0;overflow:hidden;max-height:none">SHOWN</div>'],
+    ["height:0 and overflow:hidden, then overflow:visible", '<div style="height:0;overflow:hidden;overflow:visible">SHOWN</div>'],
+    ["a semicolon inside a quoted font name", "<div style=\"font-family:'a;b';display:block\">SHOWN</div>"],
+    ["font:initial inside font-size:0", '<td style="font-size:0"><span style="font:initial">SHOWN</span></td>'],
+    ["a system font inside font-size:0", '<td style="font-size:0"><span style="font:caption">SHOWN</span></td>'],
+    ["four normal keywords before the size, inside font-size:0", '<td style="font-size:0"><span style="font:normal normal normal normal 14px a">SHOWN</span></td>'],
+    ["an oblique angle in the font shorthand, inside font-size:0", '<td style="font-size:0"><span style="font:oblique 10deg 14px a">SHOWN</span></td>'],
+    ["font:inherit under a visible size", '<td style="font-size:14px"><span style="font:inherit">SHOWN</span></td>'],
     ["opacity:0, then opacity:1", '<div style="opacity:0;opacity:1">SHOWN</div>'],
     ["font-size:0, then font-size:14px", '<span style="font-size:0;font-size:14px">SHOWN</span>'],
     ["visibility:hidden, then visibility:visible", '<span style="visibility:hidden;visibility:visible">SHOWN</span>'],
@@ -181,6 +191,65 @@ describe("bodyToText drops content hidden from the reader", () => {
         "You receive this email because you signed up at northwind.example. Unsubscribe [https://news.northwind.example/unsubscribe?u=abc123] · Email preferences [https://news.northwind.example/preferences?u=abc123]",
       ].join("\n"),
     );
+  });
+});
+
+describe("bodyToText keeps hidden content hidden when a later declaration is not plainly valid (fail closed)", () => {
+  it.each([
+    // display: only a single, plainly valid keyword shows again.
+    ...[
+      "block block",
+      "inline block",
+      "flex grid",
+      "inline-block flex",
+      "table-cell table-row",
+      "contents block",
+      "inline flow-root",
+      "-ms-flexbox",
+      "-moz-box",
+      "run-in",
+      "ruby-base-container",
+      "inline-list-item",
+      "calc(1)",
+      "min(a)",
+      "fit-content(1px)",
+      "var(--x)",
+    ].map((v): [string, string] => [`display:none, then display:${v}`, `<div style="display:none;display:${v}">SECRET</div>`]),
+    ["visibility:hidden, then visibility:calc(1)", '<span style="visibility:hidden;visibility:calc(1)">SECRET</span>'],
+    // height, max-height, overflow
+    ["height:0 and overflow:hidden, then height:none", '<div style="height:0;overflow:hidden;height:none">SECRET</div>'],
+    ["max-height:0 and overflow:hidden, then max-height:auto", '<div style="max-height:0;overflow:hidden;max-height:auto">SECRET</div>'],
+    ["height:-0 with overflow:hidden", '<div style="height:-0;overflow:hidden">SECRET</div>'],
+    ["max-height:-0px with overflow:hidden", '<div style="max-height:-0px;overflow:hidden">SECRET</div>'],
+    ["height:0 and overflow:hidden, then overflow:-webkit-paged-x", '<div style="height:0;overflow:hidden;overflow:-webkit-paged-x">SECRET</div>'],
+    ["height:0 and overflow:hidden, then overflow:overlay, which scrolls a box of no height", '<div style="height:0;overflow:hidden;overflow:overlay">SECRET</div>'],
+    // opacity, font-size
+    ["opacity:0, then opacity:1. (trailing dot)", '<div style="opacity:0;opacity:1.">SECRET</div>'],
+    ["opacity:0, then opacity:calc(abc)", '<div style="opacity:0;opacity:calc(abc)">SECRET</div>'],
+    ["font-size:0, then font-size:14.px", '<span style="font-size:0;font-size:14.px">SECRET</span>'],
+    ["font-size:0, then font-size:calc(abc)", '<span style="font-size:0;font-size:calc(abc)">SECRET</span>'],
+    ["font-size:-0", '<span style="font-size:-0">SECRET</span>'],
+    ["font-size:14px, then font-size:-0px", '<span style="font-size:14px;font-size:-0px">SECRET</span>'],
+    // Escapes, and semicolons that do not end a declaration.
+    ["display:none, then an escaped semicolon before display:block", '<div style="display:none;color:red\\3b display:block">SECRET</div>'],
+    ["display:none, then display:block with an escape (IE hack)", '<div style="display:none;display:block\\9">SECRET</div>'],
+    ["display:none, then display:block inside a quoted string", "<div style=\"display:none;font-family:'x;display:block;y'\">SECRET</div>"],
+    ["display:none, then display:block inside url()", '<div style="display:none;background:url(a;display:block;b)">SECRET</div>'],
+    ["display:none, then display:block split by a comment", '<div style="display:none;display:bl/**/ock">SECRET</div>'],
+    // The font shorthand counts as a size only when it parses strictly.
+    ["font-size:0, then a font shorthand with an invalid line height", '<span style="font-size:0;font:14px/x a">SECRET</span>'],
+    ["font-size:0, then a font shorthand with an invalid family", '<span style="font-size:0;font:14px 1">SECRET</span>'],
+    ["font-size:0, then a font shorthand with a repeated weight", '<span style="font-size:0;font:bold bold 14px a">SECRET</span>'],
+    ["a font shorthand with an invalid line height, inside font-size:0", '<td style="font-size:0"><span style="font:14px/x a">SECRET</span></td>'],
+    ["font:var(--x), inside font-size:0", '<td style="font-size:0"><span style="font:var(--x)">SECRET</span></td>'],
+    ["font:inherit, inside font-size:0", '<td style="font-size:0"><span style="font:inherit">SECRET</span></td>'],
+    ["all:inherit after a visible size, inside font-size:0", '<td style="font-size:0"><span style="font-size:14px;all:inherit">SECRET</span></td>'],
+    // A custom property can carry a hiding value: a var() counts as hiding.
+    ["display:var(--d) with --d:none", '<div style="--d:none;display:var(--d)">SECRET</div>'],
+    ["font-size:var(--z) with --z:0", '<span style="--z:0;font-size:var(--z)">SECRET</span>'],
+  ])("%s", (_, hidden) => {
+    const t = html(`<p>Before</p>${hidden}<p>After</p>`);
+    expect(t).toBe("Before\n\nAfter");
   });
 });
 

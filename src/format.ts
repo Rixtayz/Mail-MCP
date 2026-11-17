@@ -119,129 +119,219 @@ const ROOT = "mail-mcp-root";
 
 /** Elements whose content is never shown. */
 const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "script", "style"]);
-const OVERFLOW = ["overflow", "overflow-x", "overflow-y"];
-/** A CSS escape: up to six hex digits and one optional whitespace, or any other character itself. */
-const CSS_ESCAPE = /\\(?:([0-9a-f]{1,6})[ \t\n\r\f]?|([^\n\r\f0-9a-f]))/gi;
 
-// What a browser accepts for the properties that can hide content. A declaration whose value is not
-// valid is dropped by the browser, so it must not override an earlier one here either.
-const NUMBER = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?`;
-const UNIT = "px|pt|pc|em|rem|ex|rex|ch|rch|cap|rcap|ic|ric|lh|rlh|vw|vh|vi|vb|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|cqw|cqh|cqi|cqb|cqmin|cqmax|cm|mm|q|in";
-/** A length or percentage; a number without a unit only when it is zero. */
-const LENGTH = new RegExp(`^(?:${NUMBER}(?:${UNIT}|%)|[+-]?(?:0+\\.?0*|\\.0+)(?:e[+-]?\\d+)?)$`);
-/** A length, percentage or number that is zero: 0, 0px, 0.0em, -0%, .0rem, 0e0. */
-const ZERO = new RegExp(`^[+-]?(?:0+\\.?0*|\\.0+)(?:e[+-]?\\d+)?(?:${UNIT}|%)?$`);
-const OPACITY = new RegExp(`^${NUMBER}%?$`);
-/** A font size relative to the parent's, which a parent's zero size keeps at zero. */
-const RELATIVE_FONT_SIZE = new RegExp(`^(?:${NUMBER}(?:em|ex|ch|cap|ic|lh|%)|smaller|larger)$`);
-const FONT_SIZE_KEYWORDS = new Set(["xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large", "smaller", "larger", "math"]);
-/** What may come before the size in the font shorthand: style, variant, weight, stretch. */
-const FONT_PREFIX = /^(?:normal|italic|oblique|small-caps|bold|bolder|lighter|[1-9]\d{0,2}|1000|(?:ultra-|extra-|semi-)?(?:condensed|expanded))$/;
-/** System fonts, which the font shorthand can name instead of a size and family. */
-const SYSTEM_FONT = /^(?:caption|icon|menu|message-box|small-caption|status-bar)$/;
-const DISPLAY_KEYWORDS = new Set(
-  (
-    "none contents block inline run-in flow flow-root table flex grid ruby math list-item inline-block inline-table inline-flex " +
-    "inline-grid inline-list-item table-row-group table-header-group table-footer-group table-row table-cell table-column-group " +
-    "table-column table-caption ruby-base ruby-text ruby-base-container ruby-text-container -webkit-box -webkit-inline-box " +
-    "-webkit-flex -webkit-inline-flex -moz-box -moz-inline-box -ms-flexbox -ms-inline-flexbox -ms-grid -ms-inline-grid"
-  ).split(" "),
-);
-const OVERFLOW_KEYWORDS = new Set(["visible", "hidden", "clip", "scroll", "auto", "overlay", "-webkit-paged-x", "-webkit-paged-y"]);
-const SIZE_KEYWORDS = new Set(["auto", "none", "min-content", "max-content", "fit-content", "stretch", "-webkit-fill-available", "-moz-available"]);
-/** Values every property accepts. */
-const GLOBAL = /^(?:inherit|initial|unset|revert|revert-layer)$/;
-/** Values that take the parent's value. */
-const INHERIT = /^(?:inherit|unset|revert|revert-layer)$/;
-/** Values only known when the email is rendered: valid, never taken as hiding anything. */
-const COMPUTED = /^(?:var|calc|min|max|clamp|env|fit-content)\(/;
+// ---------- Inline styles, read fail closed ----------
+// Emulating what a browser accepts cannot be won, so the reading fails closed: a declaration that
+// can hide (display, visibility, opacity, font-size or the font shorthand, a zero height or
+// max-height with clipping overflow) hides as soon as it plausibly could, and a later declaration
+// of the same property shows the content again only when its whole value is plainly valid, from a
+// short allowlist. Anything else, an unknown or vendor keyword, a keyword combination, a function,
+// a trailing dot, a sign, is ignored, so hidden content stays hidden. A function, var() included,
+// counts as hiding: a custom property can carry `none` or `0`.
 
-const isNonNegativeLength = (v: string): boolean => LENGTH.test(v) && !v.startsWith("-");
-const isFontSize = (v: string): boolean => FONT_SIZE_KEYWORDS.has(v) || isNonNegativeLength(v);
-const keywords = (v: string, set: Set<string>, max: number): boolean => {
-  const tokens = v.split(" ");
-  return tokens.length <= max && tokens.every((t) => set.has(t));
-};
-
-/** Validity checks for the properties read here; any other property is kept as written. */
-const VALID = new Map<string, (value: string) => boolean>([
-  ["display", (v) => keywords(v, DISPLAY_KEYWORDS, 3) && (v === "none" || !v.split(" ").includes("none"))],
-  ["visibility", (v) => /^(?:visible|hidden|collapse)$/.test(v)],
-  ["opacity", (v) => OPACITY.test(v)],
-  ["font-size", isFontSize],
-  ["height", (v) => SIZE_KEYWORDS.has(v) || isNonNegativeLength(v)],
-  ["max-height", (v) => SIZE_KEYWORDS.has(v) || isNonNegativeLength(v)],
-  ["overflow", (v) => keywords(v, OVERFLOW_KEYWORDS, 2)],
-  ["overflow-x", (v) => OVERFLOW_KEYWORDS.has(v)],
-  ["overflow-y", (v) => OVERFLOW_KEYWORDS.has(v)],
-]);
-
-function isValid(property: string, value: string): boolean {
-  const check = VALID.get(property);
-  return !check || GLOBAL.test(value) || COMPUTED.test(value) || check(value);
+/** One declaration of an inline style: lower-case property and value, whitespace collapsed, without `!important`. */
+interface Declaration {
+  property: string;
+  value: string;
+  important: boolean;
 }
 
 /**
- * The font size a `font` shorthand sets, or undefined when the declaration is not valid: up to
- * four style, variant, weight or stretch keywords, the size (with an optional /line-height), then
- * the family, which is required. A system font sets a visible size.
+ * The declarations of an inline style, split the way a CSS parser splits them: a `;` ends a
+ * declaration only outside quotes, parentheses and comments, and a comment counts as a space. CSS
+ * escapes are not decoded: a declaration holding a backslash is left out, whether it would hide or
+ * show (an escaped hiding declaration is then not applied, an accepted miss).
  */
-function fontShorthandSize(value: string): string | undefined {
-  if (GLOBAL.test(value)) return value;
-  if (SYSTEM_FONT.test(value) || value.includes("var(")) return "medium";
-  const tokens = value.replace(/\s*\/\s*/g, "/").split(" ");
-  for (let i = 0; i < tokens.length && i <= 4; i++) {
-    const [size = "", lineHeight] = tokens[i]!.split("/");
-    if (isFontSize(size)) return i < tokens.length - 1 ? size : undefined;
-    if (lineHeight !== undefined || !FONT_PREFIX.test(size)) return undefined;
-  }
-  return undefined;
-}
-
-type Style = Map<string, string>;
-
-function decodeCssEscapes(s: string): string {
-  return s.replace(CSS_ESCAPE, (_, hex: string | undefined, ch: string | undefined) => {
-    if (hex === undefined) return ch ?? "";
-    const cp = Number.parseInt(hex, 16);
-    return cp > 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : "\uFFFD";
-  });
-}
-
-/**
- * The declarations of an inline `style` attribute, as lower-case property → lower-case value
- * without `!important`, whatever the spacing, case, comments or escapes. As in a browser, a
- * declaration whose value is not valid is dropped, and a later declaration wins, except over an
- * earlier `!important` one. The `font` shorthand counts as setting `font-size`.
- */
-function parseStyle(style: unknown): Style {
-  const out: Style = new Map();
-  if (typeof style !== "string" || !style) return out;
-  const important = new Set<string>();
-  const css = decodeCssEscapes(style.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "")).toLowerCase();
-  for (const declaration of css.split(";")) {
-    const colon = declaration.indexOf(":");
-    if (colon < 0) continue;
-    let property = declaration.slice(0, colon).trim();
-    let value = declaration.slice(colon + 1).trim().replace(/\s+/g, " ");
-    const isImportant = /!\s*important$/.test(value);
-    if (isImportant) value = value.replace(/\s*!\s*important$/, "");
-    if (property === "font") {
-      const size = fontShorthandSize(value);
-      if (size === undefined) continue;
-      property = "font-size";
-      value = size;
-    } else if (!isValid(property, value)) {
-      continue;
+function declarations(style: string): Declaration[] {
+  const out: Declaration[] = [];
+  let current = "";
+  let escaped = false;
+  let quote = "";
+  let depth = 0;
+  const end = (): void => {
+    const colon = current.indexOf(":");
+    if (!escaped && colon > 0) {
+      const property = current.slice(0, colon).trim().toLowerCase();
+      let value = current.slice(colon + 1).trim().toLowerCase().replace(/\s+/g, " ");
+      const important = /!\s*important$/.test(value);
+      if (important) value = value.replace(/\s*!\s*important$/, "");
+      out.push({ property, value, important });
     }
-    if (!isImportant && important.has(property)) continue;
-    if (isImportant) important.add(property);
-    out.set(property, value);
+    current = "";
+    escaped = false;
+  };
+  for (let i = 0; i < style.length; i++) {
+    const c = style[i]!;
+    if (c === "\\") {
+      escaped = true;
+      current += c + (style[i + 1] ?? "");
+      i++;
+    } else if (quote) {
+      if (c === quote) quote = "";
+      current += c;
+    } else if (c === "/" && style[i + 1] === "*") {
+      const close = style.indexOf("*/", i + 2);
+      i = close < 0 ? style.length : close + 1;
+      current += " ";
+    } else if (c === ";" && depth === 0) {
+      end();
+    } else {
+      if (c === '"' || c === "'") quote = c;
+      else if (c === "(") depth++;
+      else if (c === ")" && depth > 0) depth--;
+      current += c;
+    }
   }
+  end();
   return out;
 }
 
-const isZero = (value: string | undefined): boolean => value !== undefined && ZERO.test(value);
+/** What a declaration does: hides, shows (back), takes the parent's value, or nothing (ignored). */
+type Effect = "hide" | "show" | "inherit" | undefined;
+/** What a font size does: zero, a visible size, a size relative to the parent's, or the parent's size. */
+type Size = "zero" | "reset" | "relative" | "inherit" | undefined;
+
+/** A plainly valid positive number, and length or percentage. */
+const PLAIN_NUMBER = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
+const PLAIN_LENGTH = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|pc|in|cm|mm|q|em|rem|ex|ch|vw|vh|vmin|vmax|%)$/;
+/** A length that does not depend on the parent's font size. */
+const ABSOLUTE_LENGTH = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|pc|in|cm|mm|q|rem|vw|vh|vmin|vmax)$/;
+/** Anything that reads as zero: 0, -0, +0, 0.0, 0., .0, 0e3, 0px, -0px, 0%. */
+const ZERO = /^[+-]?(?:0+\.?0*|\.0+)(?:e[+-]?\d+)?(?:[a-z]+|%)?$/;
+/** A number as loosely as anything may write it, for opacity: zero or below hides. */
+const LOOSE_NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?%?$/;
+const GLOBAL_SHOW = /^(?:initial|revert|unset)$/;
+const INHERIT = /^(?:inherit|unset|revert)$/;
+const DISPLAY_SHOW = new Set(
+  (
+    "block inline inline-block flex inline-flex grid inline-grid table inline-table table-row table-cell table-row-group " +
+    "table-header-group table-footer-group table-column table-column-group table-caption list-item flow-root contents " +
+    "initial revert unset inherit"
+  ).split(" "),
+);
+const OVERFLOW_VALUES = new Set(["visible", "hidden", "clip", "auto", "scroll", "overlay"]);
+const ABSOLUTE_SIZE = /^(?:xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|initial)$/;
+const SYSTEM_FONT = /^(?:caption|icon|menu|message-box|small-caption|status-bar)$/;
+const FONT_WEIGHT = /^(?:bold|bolder|lighter|[1-9]\d{0,2}|1000)$/;
+const FONT_STRETCH = /^(?:(?:ultra-|extra-|semi-)?condensed|(?:ultra-|extra-|semi-)?expanded)$/;
+const FONT_FAMILY_ITEM = String.raw`(?:"[^"]*"|'[^']*'|-?[\p{L}_][\p{L}\p{N}_-]*(?: -?[\p{L}_][\p{L}\p{N}_-]*)*)`;
+const FONT_FAMILY = new RegExp(`^${FONT_FAMILY_ITEM}(?: ?, ?${FONT_FAMILY_ITEM})*$`, "u");
+
+const isFunction = (v: string): boolean => v.includes("(");
+const positive = (v: string): boolean => Number.parseFloat(v) > 0;
+
+function display(v: string): Effect {
+  if (v === "none" || isFunction(v)) return "hide";
+  return DISPLAY_SHOW.has(v) ? "show" : undefined;
+}
+
+function visibility(v: string): Effect {
+  if (v === "hidden" || v === "collapse" || isFunction(v)) return "hide";
+  if (v === "visible" || v === "initial") return "show";
+  return INHERIT.test(v) ? "inherit" : undefined;
+}
+
+function opacity(v: string): Effect {
+  if (isFunction(v) || (LOOSE_NUMBER.test(v) && Number.parseFloat(v) <= 0)) return "hide";
+  if (GLOBAL_SHOW.test(v) || (/^(?:\d+(?:\.\d+)?|\.\d+)%?$/.test(v) && positive(v))) return "show";
+  return undefined;
+}
+
+/** A height or max-height: "hide" when zero. `open` is the keyword that lifts the limit: auto or none. */
+function height(v: string, open: string): Effect {
+  if (isFunction(v) || ZERO.test(v)) return "hide";
+  if (v === open || GLOBAL_SHOW.test(v) || (PLAIN_LENGTH.test(v) && positive(v))) return "show";
+  return undefined;
+}
+
+/** An overflow value: "hide" when it clips (a scrolling box of no height shows nothing either). */
+function overflow(v: string, max: number): Effect {
+  if (isFunction(v)) return "hide";
+  if (GLOBAL_SHOW.test(v)) return "show";
+  const tokens = v.split(" ");
+  if (tokens.length > max || !tokens.every((t) => OVERFLOW_VALUES.has(t))) return undefined;
+  return tokens.every((t) => t === "visible") ? "show" : "hide";
+}
+
+function fontSize(v: string): Size {
+  if (isFunction(v) || ZERO.test(v)) return "zero";
+  if (INHERIT.test(v)) return "inherit";
+  if (ABSOLUTE_SIZE.test(v) || (ABSOLUTE_LENGTH.test(v) && positive(v))) return "reset";
+  if (v === "smaller" || v === "larger" || (PLAIN_LENGTH.test(v) && positive(v))) return "relative";
+  return undefined;
+}
+
+/**
+ * The size the `font` shorthand sets, when it parses strictly: style, variant, weight and stretch
+ * keywords, each at most once, or `normal`, four at most; the size; an optional /line-height (a
+ * plain number, length or percentage, or `normal`); then the family, quoted or made of names.
+ */
+function fontShorthand(v: string): Size {
+  if (isFunction(v)) return "zero";
+  if (INHERIT.test(v)) return "inherit";
+  if (v === "initial" || SYSTEM_FONT.test(v)) return "reset";
+  const tokens = v
+    .replace(/ ?\/ ?/g, "/")
+    .replace(/\boblique (?:\d+(?:\.\d+)?|\.\d+)deg\b/, "oblique")
+    .split(" ");
+  const seen = new Set<string>();
+  let i = 0;
+  for (; i < 4 && i < tokens.length; i++) {
+    const t = tokens[i]!;
+    const kind =
+      t === "normal" ? "" : t === "italic" || t === "oblique" ? "style" : t === "small-caps" ? "variant" : FONT_WEIGHT.test(t) ? "weight" : FONT_STRETCH.test(t) ? "stretch" : undefined;
+    if (kind === undefined) break;
+    if (kind && seen.has(kind)) return undefined;
+    seen.add(kind);
+  }
+  const [size = "", lineHeight, extra] = (tokens[i] ?? "").split("/");
+  if (extra !== undefined) return undefined;
+  if (lineHeight !== undefined && lineHeight !== "normal" && !ZERO.test(lineHeight) && !PLAIN_NUMBER.test(lineHeight) && !PLAIN_LENGTH.test(lineHeight)) return undefined;
+  if (!FONT_FAMILY.test(tokens.slice(i + 1).join(" "))) return undefined;
+  if (ZERO.test(size)) return "zero";
+  const s = fontSize(size);
+  return s === "inherit" || size === "initial" ? undefined : s;
+}
+
+/** What an element's inline style does to it. */
+interface StyleEffect {
+  /** Not shown at all, nor anything in it: display, opacity, or a zero height with clipping overflow. */
+  hidden: boolean;
+  visibility: Effect;
+  fontSize: Size;
+}
+
+/** Read an inline style fail closed (see above), with `!important` winning over a later declaration. */
+function styleEffect(style: unknown): StyleEffect {
+  const winners = new Map<string, { effect: string; important: boolean }>();
+  const set = (key: string, effect: string | undefined, important: boolean): void => {
+    if (effect === undefined || (winners.get(key)?.important && !important)) return;
+    winners.set(key, { effect, important });
+  };
+  for (const d of typeof style === "string" ? declarations(style) : []) {
+    const { property: p, value: v, important } = d;
+    if (p === "display") set(p, display(v), important);
+    else if (p === "visibility") set(p, visibility(v), important);
+    else if (p === "opacity") set(p, opacity(v), important);
+    else if (p === "height") set(p, height(v, "auto"), important);
+    else if (p === "max-height") set(p, height(v, "none"), important);
+    else if (p === "overflow") set(p, overflow(v, 2), important);
+    else if (p === "overflow-x" || p === "overflow-y") set(p, overflow(v, 1), important);
+    else if (p === "font-size") set("font-size", fontSize(v), important);
+    else if (p === "font") set("font-size", fontShorthand(v), important);
+    else if (p === "all" && INHERIT.test(v)) {
+      set("font-size", "inherit", important);
+      set("visibility", "inherit", important);
+    }
+  }
+  const effect = (key: string): string | undefined => winners.get(key)?.effect;
+  const clipped = ["overflow", "overflow-x", "overflow-y"].some((k) => effect(k) === "hide");
+  return {
+    hidden: effect("display") === "hide" || effect("opacity") === "hide" || (clipped && (effect("height") === "hide" || effect("max-height") === "hide")),
+    visibility: effect("visibility") as Effect,
+    fontSize: effect("font-size") as Size,
+  };
+}
 
 /**
  * True when an element is not shown at all, nor anything in it, whatever its descendants say.
@@ -250,14 +340,10 @@ const isZero = (value: string | undefined): boolean => value !== undefined && ZE
  * and mobile show it, and bulletproof buttons put their link there) and `aria-hidden="true"`
  * (it hides from screen readers only).
  */
-function hiddenElement(el: DomNode, style: Style): boolean {
+function hiddenElement(el: DomNode, style: StyleEffect): boolean {
   if (HIDDEN_ELEMENTS.has(el.name ?? "")) return true;
   if ((el.attribs as Record<string, string | undefined> | undefined)?.hidden !== undefined) return true;
-  if (style.get("display") === "none") return true;
-  const opacity = style.get("opacity");
-  if (opacity !== undefined && OPACITY.test(opacity) && Number.parseFloat(opacity) <= 0) return true;
-  const clipped = OVERFLOW.some((p) => /\b(?:hidden|clip)\b/.test(style.get(p) ?? ""));
-  return clipped && (isZero(style.get("height")) || isZero(style.get("max-height")));
+  return style.hidden;
 }
 
 /**
@@ -266,22 +352,26 @@ function hiddenElement(el: DomNode, style: Style): boolean {
  * counts as setting a visible size, since a <style> sheet, which is not read, may size it, and so
  * does the size of a <font> element (1 to 7, never zero).
  */
-function fontSizeZero(el: DomNode, style: Style, inherited: boolean): boolean {
-  const value = style.get("font-size");
-  if (value === undefined) {
-    const attribs = (el.attribs ?? {}) as Record<string, string | undefined>;
-    if (attribs.class?.trim() || (el.name === "font" && /^\s*[+-]?\d/.test(attribs.size ?? ""))) return false;
-    return inherited;
+function fontSizeZero(el: DomNode, style: StyleEffect, inherited: boolean): boolean {
+  switch (style.fontSize) {
+    case "zero":
+      return true;
+    case "reset":
+      return false;
+    case "relative":
+    case "inherit":
+      return inherited;
+    default: {
+      const attribs = (el.attribs ?? {}) as Record<string, string | undefined>;
+      if (attribs.class?.trim() || (el.name === "font" && /^\s*[+-]?\d/.test(attribs.size ?? ""))) return false;
+      return inherited;
+    }
   }
-  if (INHERIT.test(value)) return inherited;
-  if (isZero(value)) return true;
-  return RELATIVE_FONT_SIZE.test(value) ? inherited : false;
 }
 
 /** Whether an element is invisible: visibility is inherited, and a descendant can make itself visible again. */
-function invisible(value: string | undefined, inherited: boolean): boolean {
-  if (value === undefined || INHERIT.test(value)) return inherited;
-  return value === "hidden" || value === "collapse";
+function invisible(style: StyleEffect, inherited: boolean): boolean {
+  return style.visibility === "hide" ? true : style.visibility === "show" ? false : inherited;
 }
 
 /**
@@ -291,32 +381,33 @@ function invisible(value: string | undefined, inherited: boolean): boolean {
  * Iterative, never recursive: an email can nest elements thousands deep.
  */
 function dropHidden(root: DomNode): void {
-  const styles = new Map<DomNode, Style>();
+  const styles = new Map<DomNode, StyleEffect>();
   // Elements with a descendant that makes itself visible: they stay, even when invisible.
   const showsThrough = new Set<DomNode>();
   const elements = [root];
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i]!;
-    const style = parseStyle((el.attribs as Record<string, unknown> | undefined)?.style);
+    const style = styleEffect((el.attribs as Record<string, unknown> | undefined)?.style);
     styles.set(el, style);
-    if (el !== root && !invisible(style.get("visibility"), true)) {
+    if (el !== root && style.visibility === "show") {
       for (let p = el.parent; p && !showsThrough.has(p); p = p.parent) showsThrough.add(p);
     }
     for (const child of el.children ?? []) if (child.type === "tag") elements.push(child);
   }
 
+  const none: StyleEffect = { hidden: false, visibility: undefined, fontSize: undefined };
   const stack: { el: DomNode; fontZero: boolean; invisible: boolean }[] = [{ el: root, fontZero: false, invisible: false }];
   for (let item = stack.pop(); item; item = stack.pop()) {
     const parent = item;
     parent.el.children = (parent.el.children ?? []).filter((child) => {
       if (child.type === "text") return !parent.fontZero && !parent.invisible;
       if (child.type !== "tag") return false;
-      const style = styles.get(child) ?? new Map<string, string>();
+      const style = styles.get(child) ?? none;
       if (hiddenElement(child, style)) return false;
       const next = {
         el: child,
         fontZero: fontSizeZero(child, style, parent.fontZero),
-        invisible: invisible(style.get("visibility"), parent.invisible),
+        invisible: invisible(style, parent.invisible),
       };
       if (next.invisible && !showsThrough.has(child)) return false;
       stack.push(next);
