@@ -3,6 +3,7 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { VERSION } from "./constants.js";
+import { hasInvisible, removeInvisible } from "./format.js";
 import type { GraphHeader, UnsubscribeInfo } from "./types.js";
 
 const ONE_CLICK_BODY = "List-Unsubscribe=One-Click";
@@ -26,8 +27,6 @@ export function splitListUnsubscribe(value: string): string[] {
 
 /** A lone UTF-16 surrogate, half of a character such as an emoji. In `u` mode a whole pair is one code point, never matched. */
 const LONE_SURROGATE = /\p{Cs}/u;
-/** Invisible formatting characters: bidi overrides such as U+202E, zero-width spaces and joiners, byte order marks. */
-const FORMAT_CHAR = /\p{Cf}/u;
 /** Control characters, C0 and C1, including CR, LF and TAB. */
 const CONTROL_CHARS = /\p{Cc}/gu;
 /** Control characters other than CR and LF. */
@@ -37,14 +36,15 @@ const LINE_BREAK = /\r\n|\r|\n/g;
 
 /**
  * True for one plain address: no list separator, whitespace, control or URI/header delimiter,
- * no invisible formatting character (which could make the address read as another one),
- * no lone surrogate, exactly one `@`.
+ * no invisible character (a bidi override, a zero-width character, a variation selector...,
+ * which could make the address read as another one or carry hidden text), no lone surrogate,
+ * exactly one `@`.
  */
 function isSingleAddress(address: string): boolean {
   return (
     address.length <= 254 &&
     !/[\s\p{Cc},;<>"?&%]/u.test(address) &&
-    !FORMAT_CHAR.test(address) &&
+    !hasInvisible(address) &&
     !LONE_SURROGATE.test(address) &&
     address.split("@").length === 2 &&
     !address.startsWith("@") &&
@@ -87,15 +87,16 @@ function parseMailto(uri: string): { address: string; subject?: string; body?: s
   }
   if (!isSingleAddress(address)) return undefined;
   const params = new URLSearchParams(query);
-  const subject = cleanText(params.get("subject") ?? "", MAILTO_SUBJECT_MAX);
-  const body = cleanBody(params.get("body") ?? "", MAILTO_BODY_MAX);
+  // Shown raw by mail_get_message and mail_senders_summary, so cleaned like any text from a message.
+  const subject = cleanText(removeInvisible(params.get("subject") ?? ""), MAILTO_SUBJECT_MAX);
+  const body = cleanBody(removeInvisible(params.get("body") ?? ""), MAILTO_BODY_MAX);
   return { address, ...(subject ? { subject } : {}), ...(body ? { body } : {}) };
 }
 
 /**
  * Parse List-Unsubscribe / List-Unsubscribe-Post headers into structured info. An https link
  * wins over an http one; the mailto subject and body come without control characters (the body
- * keeps its line breaks, as CRLF), capped at 200 and 1000 characters.
+ * keeps its line breaks, as CRLF) or invisible characters, capped at 200 and 1000 characters.
  */
 export function parseListUnsubscribe(headers: GraphHeader[] | undefined): UnsubscribeInfo {
   const lu = header(headers, "List-Unsubscribe");

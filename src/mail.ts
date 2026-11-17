@@ -1,5 +1,15 @@
 import { PAGE_SIZE_SCAN } from "./constants.js";
-import { bodyToText, summarizeMessage, truncate, type MessageSummary } from "./format.js";
+import {
+  ADDRESS_MAX,
+  bodyToText,
+  NAME_MAX,
+  RECIPIENTS_MAX,
+  sanitizeLine,
+  SUBJECT_MAX,
+  summarizeMessage,
+  truncate,
+  type MessageSummary,
+} from "./format.js";
 import { GraphClient, odataString } from "./graph.js";
 import type { BatchRequest, GraphHeader, GraphMailFolder, GraphMessage, UnsubscribeInfo } from "./types.js";
 import {
@@ -161,10 +171,12 @@ export class MailService {
     const out: FolderInfo[] = [];
     const walk = async (path: string, parentPath: string): Promise<void> => {
       for await (const f of this.graph.paginate<GraphMailFolder>(`${path}?$top=250`)) {
-        const fullPath = parentPath ? `${parentPath}/${f.displayName}` : f.displayName;
+        // Folder names are shown, and matched against the names the assistant passes back, cleaned.
+        const name = sanitizeLine(f.displayName ?? "");
+        const fullPath = parentPath ? `${parentPath}/${name}` : name;
         out.push({
           id: f.id,
-          name: f.displayName,
+          name,
           path: fullPath,
           ...(f.parentFolderId ? { parentId: f.parentFolderId } : {}),
           total: f.totalItemCount ?? 0,
@@ -210,8 +222,8 @@ export class MailService {
     await this.listFolders(true);
     const folder = (await this.listFolders()).find((f) => f.id === created.id) ?? {
       id: created.id,
-      name: created.displayName,
-      path: created.displayName,
+      name: sanitizeLine(created.displayName ?? ""),
+      path: sanitizeLine(created.displayName ?? ""),
       total: 0,
       unread: 0,
     };
@@ -247,7 +259,10 @@ export class MailService {
 
   async getMessage(id: string): Promise<{
     summary: MessageSummary;
+    /** The first RECIPIENTS_MAX recipient addresses. */
     to: string[];
+    /** How many recipient addresses the message has. */
+    toTotal: number;
     body: string;
     truncated: boolean;
     hasAttachments: boolean;
@@ -258,9 +273,11 @@ export class MailService {
       `/me/messages/${encodeURIComponent(id)}?$select=${LIST_SELECT},toRecipients,hasAttachments,body,internetMessageHeaders,webLink`,
       );
     const { text, truncated } = truncate(bodyToText(m.body));
+    const to = (m.toRecipients ?? []).map((r) => sanitizeLine(r.emailAddress?.address ?? "", ADDRESS_MAX)).filter(Boolean);
     return {
       summary: summarizeMessage(m),
-      to: (m.toRecipients ?? []).map((r) => r.emailAddress?.address ?? "").filter(Boolean),
+      to: to.slice(0, RECIPIENTS_MAX),
+      toTotal: to.length,
       body: text,
       truncated,
       hasAttachments: m.hasAttachments ?? false,
@@ -296,8 +313,9 @@ export class MailService {
       if (since) qs.push(`$filter=${encodeURIComponent(`receivedDateTime ge ${since}`)}`);
       for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${folderId}/messages?${qs.join("&")}`)) {
         scanned++;
-        const address = m.from?.emailAddress?.address?.toLowerCase();
+        const address = sanitizeLine(m.from?.emailAddress?.address?.toLowerCase() ?? "", ADDRESS_MAX);
         if (!address) continue;
+        const name = m.from?.emailAddress?.name;
         const received = m.receivedDateTime ?? "";
         const cur = byAddress.get(address);
         if (cur) {
@@ -305,19 +323,19 @@ export class MailService {
           if (!m.isRead) cur.unreadCount++;
           if (received > cur.lastReceived) {
             cur.lastReceived = received;
-            cur.lastSubject = m.subject ?? "";
+            cur.lastSubject = sanitizeLine(m.subject ?? "", SUBJECT_MAX);
             cur.lastMessageId = m.id;
-            cur.name = m.from?.emailAddress?.name ?? cur.name;
+            if (name != null) cur.name = sanitizeLine(name, NAME_MAX);
           }
         } else {
           byAddress.set(address, {
             address,
-            name: m.from?.emailAddress?.name ?? "",
+            name: sanitizeLine(name ?? "", NAME_MAX),
             domain: address.split("@")[1] ?? "",
             count: 1,
             unreadCount: m.isRead ? 0 : 1,
             lastReceived: received,
-            lastSubject: m.subject ?? "",
+            lastSubject: sanitizeLine(m.subject ?? "", SUBJECT_MAX),
             lastMessageId: m.id,
           });
         }
@@ -415,7 +433,7 @@ export class MailService {
   async unsubscribe(id: string): Promise<UnsubscribeOutcome> {
     const m = await this.graph.get<GraphMessage>(`/me/messages/${encodeURIComponent(id)}?$select=id,subject,from,internetMessageHeaders`);
     const info = parseListUnsubscribe(m.internetMessageHeaders);
-    const base = { from: m.from?.emailAddress?.address ?? "", subject: m.subject ?? "" };
+    const base = { from: sanitizeLine(m.from?.emailAddress?.address ?? "", ADDRESS_MAX), subject: sanitizeLine(m.subject ?? "", SUBJECT_MAX) };
 
     // A link is only ever POSTed to or handed to the browser once its host is known to be public.
     // A link to a non-public host, or one that cannot be checked, blocks everything, the mailto link
