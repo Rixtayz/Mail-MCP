@@ -153,16 +153,18 @@ const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "scrip
 //
 // What hides: display:none (and the table columns); visibility:hidden or collapse; an opacity of
 // zero or below; a font size of zero or too small to read (below 1px or 1pt, a tenth of an em,
-// 10%); a zero height, max-height, width or max-width with overflow that clips; a transform, scale
-// or zoom that leaves less than a tenth of the content on an axis.
+// 10%); a zero height or max-height, or a width or max-width of zero or too narrow to show
+// anything, with overflow that clips; a transform, scale or zoom that leaves less than a tenth of
+// the content on an axis.
 //
-// On display, visibility, opacity, height, width, overflow, scale and zoom, a function, var()
-// included, counts as hiding: a custom property can carry `none` or `0`. So does var(), env() or
-// attr() in a transform, and a function inside one of its scales. A font size given by a
-// function, such as clamp() or calc(), which modern newsletters use, counts as visible instead,
-// unless the element is under a zero size or has a zero size declared too. So a zero size written
-// as a function is not caught (accepted): `font-size:var(--z)` with `--z:0`,
-// `font-size:calc(0px)`, `font-size:clamp(0px,0vw,0px)`, `font:calc(0px) a`.
+// On display, visibility, opacity, height, overflow, scale and zoom, a function, var() included,
+// counts as hiding: a custom property can carry `none` or `0`. So does var(), env() or attr() in a
+// transform, and a function inside one of its scales. A font size given by a function, such as
+// clamp() or calc(), which modern newsletters use, counts as visible instead, unless the element
+// is under a zero size or has a zero size declared too; and a width given by one, such as calc()
+// or min() in a responsive layout, does not hide. So a zero size or width written as a function is
+// not caught (accepted): `font-size:var(--z)` with `--z:0`, `font-size:calc(0px)`,
+// `font-size:clamp(0px,0vw,0px)`, `font:calc(0px) a`, `width:calc(0px)`.
 
 /** One declaration of an inline style: lower-case property and value, whitespace collapsed, without `!important`. */
 interface Declaration {
@@ -635,9 +637,21 @@ function opacity(v: string): Effect {
   return undefined;
 }
 
-/** A height, width, max-height or max-width: "hide" when zero. `open` is the keyword that lifts the limit: auto or none. */
+/** A height or max-height: "hide" when zero, or a function. `open` is the keyword that lifts the limit: auto or none. */
 function extent(v: string, open: string): Effect {
   if (isFunction(v) || ZERO.test(v)) return "hide";
+  if (v === open || GLOBAL_SHOW.test(v) || (PLAIN_LENGTH.test(v) && positive(v))) return "show";
+  return undefined;
+}
+
+/**
+ * A width or max-width: "hide" only when zero or too narrow to show anything (see tooSmall; a
+ * percentage only below 1%). A function, such as calc() or min() in a responsive layout, neither
+ * hides nor shows again, so a zero width written as one is not caught (accepted: `width:calc(0px)`).
+ */
+function breadth(v: string, open: string): Effect {
+  if (tooSmall(v) && !(v.endsWith("%") && Math.abs(Number.parseFloat(v)) >= 1)) return "hide";
+  if (isFunction(v)) return undefined;
   if (v === open || GLOBAL_SHOW.test(v) || (PLAIN_LENGTH.test(v) && positive(v))) return "show";
   return undefined;
 }
@@ -856,8 +870,10 @@ function applyDeclaration(winners: Winners, d: Declaration | undefined, clean: b
   if (p === "display") setEffect(winners, p, display(v), important, clean);
   else if (p === "visibility") setEffect(winners, p, visibility(v), important, clean);
   else if (p === "opacity") setEffect(winners, p, opacity(v), important, clean);
-  else if (p === "height" || p === "width") setEffect(winners, p, extent(v, "auto"), important, clean);
-  else if (p === "max-height" || p === "max-width") setEffect(winners, p, extent(v, "none"), important, clean);
+  else if (p === "height") setEffect(winners, p, extent(v, "auto"), important, clean);
+  else if (p === "max-height") setEffect(winners, p, extent(v, "none"), important, clean);
+  else if (p === "width") setEffect(winners, p, breadth(v, "auto"), important, clean);
+  else if (p === "max-width") setEffect(winners, p, breadth(v, "none"), important, clean);
   else if (p === "overflow") setEffect(winners, p, overflow(v, 2), important, clean);
   else if (p === "overflow-x" || p === "overflow-y") setEffect(winners, p, overflow(v, 1), important, clean);
   else if (p === "transform") setEffect(winners, p, transform(v), important, clean);

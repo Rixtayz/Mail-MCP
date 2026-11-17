@@ -483,6 +483,10 @@ describe("bodyToText drops content shrunk out of sight (R17)", () => {
     ["max-width:0 with overflow-x:hidden", '<div style="max-width:0;overflow-x:hidden">SECRET</div>'],
     ["width:0 and overflow:hidden, then a width that is not plainly valid", '<div style="width:0;overflow:hidden;width:calc(100%)">SECRET</div>'],
     ["width:0 and overflow:hidden, then width:auto after a no-break space", '<div style="width:0;overflow:hidden;width:&nbsp;auto">SECRET</div>'],
+    // R18: a function width does not hide, but it does not show content again either.
+    ["width:0 and overflow:hidden, then width:calc(50%)", '<div style="width:0;overflow:hidden;width:calc(50%)">SECRET</div>'],
+    ["a width too small to show anything, with overflow:hidden", '<div style="width:0.5px;overflow:hidden">SECRET</div>'],
+    ["a max-width too small to show anything, with overflow:hidden", '<div style="max-width:.01em;overflow:hidden">SECRET</div>'],
     // A font size too small to read counts as zero.
     ["font-size:0.5px", '<span style="font-size:0.5px">SECRET</span>'],
     ["font-size:0.9pt", '<span style="font-size:0.9pt">SECRET</span>'],
@@ -535,6 +539,14 @@ describe("bodyToText drops content shrunk out of sight (R17)", () => {
     ["width:0 and overflow:hidden, then width:100%", '<div style="width:0;overflow:hidden;width:100%">SHOWN</div>'],
     ["max-width:0 and overflow:hidden, then max-width:none", '<div style="max-width:0;overflow:hidden;max-width:none">SHOWN</div>'],
     ["a hybrid column: width:100%, max-width:300px and overflow:hidden", '<div style="display:inline-block;width:100%;max-width:300px;overflow:hidden">SHOWN</div>'],
+    // R18: responsive widths are functions, and a function width does not hide.
+    ["width:calc(100% - 40px) with overflow:hidden", '<div style="width:calc(100% - 40px);overflow:hidden">SHOWN</div>'],
+    ["max-width:min(600px,100%) with overflow:hidden", '<div style="max-width:min(600px,100%);overflow:hidden">SHOWN</div>'],
+    ["max-width:clamp() with overflow:hidden, read loosely after a backslash", '<div style="x:\\75 rl(a);max-width:clamp(300px,50%,600px);overflow:hidden">SHOWN</div>'],
+    ["a narrow column: width:5% with overflow:hidden", '<div style="width:5%;overflow:hidden">SHOWN</div>'],
+    // Accepted residual (R18): a zero width written as a function is not caught.
+    ["width:calc(0px) with overflow:hidden (accepted residual)", '<div style="width:calc(0px);overflow:hidden">SHOWN</div>'],
+    ["width:var(--w) with --w:0 and overflow:hidden (accepted residual)", '<div style="--w:0;width:var(--w);overflow:hidden">SHOWN</div>'],
     ["a font shorthand with a quoted family glued to its size, inside font-size:0", "<td style=\"font-size:0\"><span style=\"font:15px'Arial'\">SHOWN</span></td>"],
     ["font-size:1px", '<span style="font-size:1px">SHOWN</span>'],
     ["font-size:0.1em", '<span style="font-size:0.1em">SHOWN</span>'],
