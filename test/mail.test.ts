@@ -450,6 +450,18 @@ describe("MailService.unsubscribe", () => {
     expect(posts.sent[0]?.connectedTo).toEqual(["93.184.215.14"]);
   });
 
+  it("shows and posts to a link as a URL parser writes it: invisible characters as %-escapes", async () => {
+    const { mail, posts } = service(() => message({ "List-Unsubscribe": "<https://X.example/u\u{E0049}\u202E>", "List-Unsubscribe-Post": oneClick }));
+    const r = await mail.unsubscribe("m");
+    expect(r).toMatchObject({ method: "one-click", ok: true, url: "https://x.example/u%F3%A0%81%89%E2%80%AE" });
+    expect(posts.sent.map((s) => `${s.options.hostname}${s.options.path}`)).toEqual(["x.example/u%F3%A0%81%89%E2%80%AE"]);
+  });
+
+  it("hands the browser a link as a URL parser writes it", async () => {
+    const { mail } = service(() => message({ "List-Unsubscribe": "<https://x.example/page\u200B>" }));
+    expect(await mail.unsubscribe("m")).toMatchObject({ method: "browser", url: "https://x.example/page%E2%80%8B" });
+  });
+
   it("blocks a one-click link to a private address: no URL, no mailto link, nothing sent", async () => {
     const { mail, calls, posts } = service(() => message({ "List-Unsubscribe": "<https://192.168.1.1/unsub>, <mailto:stop@x.example>", "List-Unsubscribe-Post": oneClick }));
     const r = await mail.unsubscribe("m");
