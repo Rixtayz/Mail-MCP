@@ -681,6 +681,31 @@ describe("session tools over the wire", () => {
     await b.close();
   });
 
+  it("mail_logout says which leftover temporary file it could not delete", async () => {
+    const file = "/home/u/.mail-mcp/token-cache.json.0123456789abcdef.tmp";
+    const a = await connect(fakeSession({ logout: async () => ({ account: "a@outlook.com", notRemoved: [file] }) }));
+    const out = await a.request("tools/call", { name: "mail_logout", arguments: {} });
+    expect(out.result?.structuredContent).toEqual({
+      signedOut: true,
+      account: "a@outlook.com",
+      revokeUrl: "https://microsoft.com/consent",
+      detail:
+        `Signed out of a@outlook.com. The sign-in cache file was removed, but a temporary file that an interrupted save left, which may hold a token, could not be deleted: ${file}. Ask the user to delete it. ` +
+        "To also withdraw Mail-MCP's access on Microsoft's side, the user can open https://microsoft.com/consent.",
+    });
+    await a.close();
+    const b = await connect(fakeSession({ logout: async () => ({ notRemoved: [file, `${file}2`] }) }));
+    const none = await b.request("tools/call", { name: "mail_logout", arguments: {} });
+    expect(none.result?.structuredContent).toEqual({
+      signedOut: false,
+      revokeUrl: "https://microsoft.com/consent",
+      detail:
+        `No account was signed in, but 2 temporary files that an interrupted save left, which may hold a token, could not be deleted: ${file}, ${file}2. Ask the user to delete them. ` +
+        "To withdraw Mail-MCP's access on Microsoft's side, the user can open https://microsoft.com/consent.",
+    });
+    await b.close();
+  });
+
   it("copies only the listed fields: a token that leaks into the service result never reaches the client", async () => {
     const leaky = (async () => ({ account: "a@outlook.com", accessToken: "eyJsecret" })) as unknown as SessionService["logout"];
     const { request, close } = await connect(fakeSession({ logout: leaky }));

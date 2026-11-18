@@ -18,7 +18,7 @@ if (command === "login") {
   });
 } else if (command === "logout") {
   logout().then(
-    ({ account }) => console.error(logoutDetail(account)),
+    ({ account, notRemoved }) => console.error(logoutDetail(account, notRemoved)),
     (err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
