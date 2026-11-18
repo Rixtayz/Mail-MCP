@@ -7,7 +7,7 @@ A break in any of those promises is treated as a security issue.
 ## What to report
 
 - A tool result, log line or error message that leaks the access or refresh token, or the token cache contents.
-- The token cache written with permissions wider than owner-only, outside `~/.mail-mcp/` / `MAIL_MCP_CACHE_PATH`, or at a relative `MAIL_MCP_CACHE_PATH`. On macOS and Linux, also the cache saved in a folder that belongs to another user or that other users can write to. A known limit, not a bug: a custom path cannot be fully protected when the folder above its cache folder is one that other users can write to and that is not sticky (see the README).
+- The token cache written with permissions wider than owner-only, outside `~/.mail-mcp/` / `MAIL_MCP_CACHE_PATH`, or at a relative `MAIL_MCP_CACHE_PATH`. On macOS and Linux, also the cache saved in a folder that belongs to another user or that other users can write to. A known limit, not a bug: a custom path cannot be fully protected when any folder above its cache folder belongs to another user (other than root), or other users can write to it and it is not sticky (`/tmp` is sticky, so a folder of your own directly under it is fine). The check reads only the mode bits, so a macOS access control list that lets other users write is not seen (see the README).
 - A token left on disk after `mail_logout` or `mail-mcp logout`, such as a temporary file from a save cut short.
 - Any path that sends an email, or any request for the `Mail.Send` permission. Mail-MCP only requests `Mail.ReadWrite`.
 - A `mail_login` or `mail_logout` result that contains a token, or the token cache contents. `mail_login` may return the Microsoft sign-in URL, which holds no token.

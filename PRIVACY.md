@@ -20,7 +20,9 @@ Nothing. The publisher runs no server for Mail-MCP, and the software sends the p
 
 - Microsoft sign-in (`login.microsoftonline.com`), to sign you in.
 - Microsoft Graph (`graph.microsoft.com`), to read and organize your mail.
-- The unsubscribe address a sender published in its own email, only when you ask to unsubscribe and the sender supports one-click unsubscribe (RFC 8058), and never when that address is on your computer or your local network.
+- The unsubscribe address a sender published in its own email, only when your assistant calls the unsubscribe tool on one of its messages and the sender supports one-click unsubscribe (RFC 8058), and never when that address is on your computer or your local network.
+
+When the unsubscribe tool runs, the host name of the sender's link is looked up in DNS, even when nothing is sent to it.
 
 Your mail is read by your AI assistant under the terms of the assistant's own provider. Mail-MCP does not control that.
 
@@ -28,7 +30,7 @@ Your mail is read by your AI assistant under the terms of the assistant's own pr
 
 A sign-in file, `~/.mail-mcp/token-cache.json` (or the absolute path in `MAIL_MCP_CACHE_PATH`), readable by your user only where the operating system enforces file modes. It holds Microsoft sign-in tokens, never your password. On macOS and Linux, `~/.mail-mcp` is made owner-only (mode 700), and the file is not saved in a folder that belongs to another user or that other users can write to. On Windows the file has the permissions of its folder. The [README](README.md#security-and-privacy) gives the details and their limits.
 
-During a sign-in, a small page that sends your browser on to the Microsoft sign-in page is written to a new temporary folder, and deleted when the sign-in ends. It holds the sign-in link, never a token.
+During a sign-in, a small page that sends your browser on to the Microsoft sign-in page is written to a new temporary folder, and deleted when the sign-in ends. If Mail-MCP is stopped before then (the app quits, or Ctrl+C on `mail-mcp login`), the page can stay in that folder. It holds the sign-in link, never a token.
 
 ## Permissions and revoking
 

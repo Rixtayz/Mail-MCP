@@ -5,7 +5,7 @@
   "version": "0.3.0",
   "icon": "icon.png",
   "description": "Personal Outlook mailbox (Outlook.com, Hotmail, Live, MSN): read, search, file, delete and unsubscribe from newsletters.",
-  "long_description": "Mail-MCP lets Claude triage a personal Outlook mailbox (Outlook.com, Hotmail, Live or MSN address) through Microsoft Graph: list folders, search and read messages, summarise senders, move or delete messages, and unsubscribe from mailing lists. Claude signs you in from the chat. Mail-MCP talks only to Microsoft, plus the sender's own unsubscribe address when you ask to unsubscribe.",
+  "long_description": "Mail-MCP lets Claude triage a personal Outlook mailbox (Outlook.com, Hotmail, Live or MSN address) through Microsoft Graph: list folders, search and read messages, summarise senders, move or delete messages, and unsubscribe from mailing lists. Claude signs you in from the chat. Mail-MCP talks only to Microsoft, plus a sender's own one-click unsubscribe address when the unsubscribe tool is called on one of its messages.",
   "author": {
     "name": "Rixtayz"
   },
@@ -37,8 +37,8 @@
     { "name": "mail_senders_summary", "description": "Scan a folder and aggregate messages by sender, with the available unsubscribe method." },
     { "name": "mail_move", "description": "Move one or more messages to a folder." },
     { "name": "mail_delete", "description": "Move one or more messages to Deleted Items, where you can restore them." },
-    { "name": "mail_purge", "description": "Permanently delete one or more messages, only when you ask for it. Cannot be undone." },
-    { "name": "mail_bulk_by_sender", "description": "Move every message from one sender in a folder, or move them to Deleted Items. Counts only, unless confirmed." },
+    { "name": "mail_purge", "description": "Permanently delete one or more messages. Cannot be undone. Meant only for when you ask for permanent deletion." },
+    { "name": "mail_bulk_by_sender", "description": "Move every message from one sender in a folder, or move them to Deleted Items. Counts only, unless called with dryRun: false." },
     { "name": "mail_unsubscribe", "description": "Unsubscribe from the mailing list of a message: one-click, a link to open, or an email link you send yourself. Suspicious links are blocked." },
     { "name": "mail_login", "description": "Sign in to the personal Outlook mailbox through the browser." },
     { "name": "mail_logout", "description": "Sign out and remove the sign-in stored on this computer." }
