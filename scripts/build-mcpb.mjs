@@ -15,13 +15,36 @@ if (!existsSync(join(root, "dist", "index.js"))) {
   process.exit(1);
 }
 
-// One command string with a shell: works with npm/npx on Windows (.cmd) and Unix.
-function run(command, cwd) {
-  const r = spawnSync(command, { cwd, stdio: "inherit", shell: true });
+// The mcpb CLI installed by `npm ci` from the lock file, run with this Node.js. Never
+// `npx mcpb`: when the local copy is missing, npx downloads whatever the registry serves.
+const mcpbPackage = join(root, "node_modules", "@anthropic-ai", "mcpb");
+let mcpbCli;
+try {
+  const { bin } = JSON.parse(readFileSync(join(mcpbPackage, "package.json"), "utf8"));
+  mcpbCli = join(mcpbPackage, typeof bin === "string" ? bin : bin.mcpb);
+} catch {
+  // reported below
+}
+if (!mcpbCli || !existsSync(mcpbCli)) {
+  console.error("The local @anthropic-ai/mcpb is missing: run `npm ci` first.");
+  process.exit(1);
+}
+
+function check(r, what) {
   if (r.status !== 0) {
-    console.error(`Command failed (${r.status}): ${command}`);
+    console.error(`Command failed (${r.status ?? r.error?.message}): ${what}`);
     process.exit(r.status ?? 1);
   }
+}
+
+// One command string with a shell: works with npm on Windows (.cmd) and Unix.
+function run(command, cwd) {
+  check(spawnSync(command, { cwd, stdio: "inherit", shell: true }), command);
+}
+
+// No shell: the arguments reach mcpb as they are, spaces in paths included.
+function mcpb(...args) {
+  check(spawnSync(process.execPath, [mcpbCli, ...args], { cwd: root, stdio: "inherit" }), `mcpb ${args.join(" ")}`);
 }
 
 rmSync(stage, { recursive: true, force: true });
@@ -37,7 +60,7 @@ cpSync(join(root, "package-lock.json"), join(stage, "package-lock.json"));
 cpSync(join(root, "dist"), join(stage, "dist"), { recursive: true });
 
 run("npm ci --omit=dev --ignore-scripts", stage);
-run(`npx mcpb validate "${join(stage, "manifest.json")}"`, root);
-run(`npx mcpb pack "${stage}" "${output}"`, root);
+mcpb("validate", join(stage, "manifest.json"));
+mcpb("pack", stage, output);
 
 console.log(`\nBundle: ${output} (${(statSync(output).size / 1024 / 1024).toFixed(1)} MB)`);

@@ -13,13 +13,20 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
+      # Change both together. The hash is that of mcp-publisher_linux_amd64.tar.gz from the
+      # registry's GitHub release, worked out once and written here, so a file swapped in that
+      # release (with its checksums file) cannot be run.
       MCP_PUBLISHER_VERSION: "1.8.1"
+      MCP_PUBLISHER_SHA256: "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: Check server.json against package.json and npm
         run: |
@@ -39,12 +46,12 @@ jobs:
             exit 1
           fi
 
-      - name: Install mcp-publisher (pinned, checksum verified)
+      - name: Install mcp-publisher (pinned version and SHA-256)
         run: |
           base="https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}"
           file="mcp-publisher_linux_amd64.tar.gz"
           curl -fsSLO "$base/$file"
-          curl -fsSL "$base/registry_${MCP_PUBLISHER_VERSION}_checksums.txt" | grep " ${file}\$" | sha256sum -c -
+          echo "${MCP_PUBLISHER_SHA256}  ${file}" | sha256sum -c -
           tar xzf "$file" mcp-publisher
 
       - name: Authenticate with GitHub OIDC
