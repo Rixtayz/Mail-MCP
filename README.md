@@ -100,6 +100,14 @@ During a sign-in it also listens on 127.0.0.1, on your own computer, where your 
 
 **Where the code comes from.** Releases are published from GitHub Actions, not from a personal machine, with [npm provenance](https://docs.npmjs.com/generating-provenance-statements). The package page on npmjs.com shows the commit and workflow run a version was built from, and `npm audit signatures` checks the signatures and provenance of installed packages. Each GitHub release also carries the `.mcpb` file. This applies to releases from 0.2.0 on.
 
+From 0.3.0 on, the release workflow builds and tests a commit already on `main` once, then publishes those exact files, and the `.mcpb` carries a GitHub build attestation. The npm package carries the lock file it was tested with, as `npm-shrinkwrap.json`, so `npx` on npm 7 to 11 installs those dependency versions; npm 12 ignores that file and installs the newest matching versions. To check that a `.mcpb` you downloaded was built by this repository's release workflow, run, with the [GitHub CLI](https://cli.github.com):
+
+```bash
+gh attestation verify mail-mcp-X.Y.Z.mcpb -R Rixtayz/Mail-MCP
+```
+
+GitHub releases are immutable from 0.3.0 on: once a release is published, its files and its tag cannot be changed or replaced.
+
 **Verified publisher.** The consent screen names the publisher, Les Solutions Devforge inc, with Microsoft's verified badge. That means Microsoft has confirmed, through its partner program, which company registered the app; Mail-MCP itself is published by Rixtayz. It does not mean Microsoft reviewed the code: the code is in this repository. If you would rather not rely on the shared app, use your own, below.
 
 ## Use your own Entra app (advanced)

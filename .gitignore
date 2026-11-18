@@ -10,3 +10,6 @@ mcp-publisher
 mcp-publisher.tar.gz
 build/
 *.mcpb
+
+# Made from package-lock.json by the release workflow, for the published package only
+npm-shrinkwrap.json

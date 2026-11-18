@@ -61,9 +61,10 @@
     "url": "https://github.com/Rixtayz/Mail-MCP/issues"
   },
   "files": [
-    "dist",
+    "dist/**/*.js",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "npm-shrinkwrap.json"
   ],
   "publishConfig": {
     "access": "public"

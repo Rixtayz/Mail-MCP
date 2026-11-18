@@ -42,12 +42,22 @@ Security problems go through [SECURITY.md](SECURITY.md) rather than a public iss
 
 Pushing a tag publishes to npm from GitHub Actions, with provenance, and creates the GitHub release with the Claude Desktop bundle attached.
 
-1. Bump the version in `package.json`, in both `version` fields of `server.json`, in `mcpb/manifest.json`, and in the Claude plugin: `version` in `plugin/.claude-plugin/plugin.json` and the pinned package in `plugin/.mcp.json`. Then run `npm install --package-lock-only`. A test checks that all of them agree.
+1. Bump the version in `package.json`, in both `version` fields of `server.json`, in `mcpb/manifest.json`, and in the Claude plugin: `version` in `plugin/.claude-plugin/plugin.json` and the pinned package in `plugin/.mcp.json`. Then run `npm install --package-lock-only`, which updates `package-lock.json`. A test checks that all of them agree.
 2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## [X.Y.Z] - date` heading. The release notes are taken from that section.
 3. Commit, then tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin main vX.Y.Z`.
-4. The **Release** workflow checks the tag against `package.json` and that `CHANGELOG.md` has a non-empty section for the version, publishes `@rixtay/mail-mcp` to npm (typecheck, tests and build run first) and creates the GitHub release with `mail-mcp-X.Y.Z.mcpb`. If the `bundle` job fails after `npm` has published, use "Re-run failed jobs", not "Re-run all jobs": re-running all jobs would retry the publish, which fails because the version already exists.
+4. The **Release** workflow runs four jobs, each with only the permissions it needs:
+   - `build` (read-only): checks that the tag matches `package.json`, that the tagged commit is on `main`, and that `CHANGELOG.md` has a non-empty section for the version; installs with `npm ci --ignore-scripts`; runs typecheck, tests and build; then packs the npm tarball, with `package-lock.json` copied in as `npm-shrinkwrap.json`, and the `.mcpb`, and keeps them, with the release notes, as workflow artifacts. It fails if the tarball lacks the shrinkwrap or holds a source map.
+   - `attest`: signs a GitHub build attestation for the `.mcpb` and the tarball. It installs and runs nothing from the project.
+   - `npm`: runs in the `release` environment and publishes the tarball from `build` as is, with `npm publish <tarball> --ignore-scripts`, through trusted publishing (provenance included). It fails, rather than install another npm, if the runner's npm is older than 11.5.1.
+   - `release`: creates the GitHub release with `mail-mcp-X.Y.Z.mcpb` attached. `gh` uploads the file to a draft and then publishes it, so the immutable release is complete when it is published.
+
+   If `release` fails after `npm` has published, use "Re-run failed jobs", not "Re-run all jobs": re-running all jobs would retry the publish, which fails because the version already exists.
 5. Run **Publish to MCP Registry** from the Actions tab. It checks that `server.json` matches the version now on npm, then publishes through GitHub OIDC.
 6. The Claude plugin directory picks up the new commit on `main` and scans it. The plugin pins the npm version, so it starts working once step 4 has published that version.
+
+### Lock files
+
+The repository's lock file is `package-lock.json`, and it is the only one to commit. The published package carries a copy of it as `npm-shrinkwrap.json`, made by the `build` job just before `npm pack`, so that `npx` users on npm 7 to 11 install the dependency tree the release was tested with. npm 12 ignores the shrinkwrap and installs the newest matching versions. `npm-shrinkwrap.json` is in `.gitignore`: a copy made by hand to check `npm pack --dry-run` is never committed, but delete it afterwards, because npm 11 and earlier read it instead of `package-lock.json`.
 
 ### One-time npm setup
 
@@ -60,3 +70,8 @@ npm publishes without a stored token, through trusted publishing. On npmjs.com, 
 - Allow: `npm publish`
 
 The setting lapses if no publish validates it within 2 days, so set it up shortly before tagging.
+
+### One-time GitHub setup
+
+- An environment named `release` (Settings, Environments), with deployment limited to tags matching `v*`. The `npm` job runs in it. The npm trusted publisher above leaves its environment empty, so npm does not check which environment the publish comes from.
+- Immutable releases (Settings, General, Releases): a published release's files and tag can no longer be changed.
