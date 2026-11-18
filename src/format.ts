@@ -146,8 +146,12 @@ const MAX_CHILD_NODES = 10_000;
 /** The element bodyToText wraps every HTML body in, so that hidden content is removed before anything is formatted. */
 const ROOT = "mail-mcp-root";
 
-/** Elements whose content is never shown. */
-const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "script", "style"]);
+/**
+ * Elements whose content is never shown. Not `head` as a whole: html-to-text keeps everything that
+ * follows a head left open (no `</head>`, no body) inside it, where a browser shows it as the body.
+ * What a head itself holds with text in it (title, style, script, noscript, template) is listed.
+ */
+const HIDDEN_ELEMENTS = new Set(["title", "template", "noscript", "script", "style"]);
 
 // ---------- Inline styles, read fail closed ----------
 // Emulating what a browser accepts cannot be won, so the reading fails closed, in two ways.
