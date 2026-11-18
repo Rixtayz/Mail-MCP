@@ -63,12 +63,25 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      # The repository's lockfile is package-lock.json. The published package carries a copy
+      # as npm-shrinkwrap.json, so that npx on npm 7 to 11 installs the dependency tree tested
+      # above (npm 12 ignores it). The package ships compiled JavaScript only, no source maps.
       - name: Pack the npm package
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          cp package-lock.json npm-shrinkwrap.json
           npm pack --ignore-scripts
-          test -f "rixtay-mail-mcp-${VERSION}.tgz"
+          tgz="rixtay-mail-mcp-${VERSION}.tgz"
+          contents=$(tar -tzf "$tgz")
+          if ! grep -qx 'package/npm-shrinkwrap.json' <<< "$contents"; then
+            echo "$tgz does not contain npm-shrinkwrap.json." >&2
+            exit 1
+          fi
+          if grep '\.map$' <<< "$contents"; then
+            echo "$tgz contains the source maps above." >&2
+            exit 1
+          fi
 
       - run: npm run build:mcpb
 
