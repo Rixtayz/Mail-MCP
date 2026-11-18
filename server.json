@@ -8,13 +8,13 @@
     "url": "https://github.com/Rixtayz/Mail-MCP",
     "source": "github"
   },
-  "version": "0.2.2",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@rixtay/mail-mcp",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -29,7 +29,7 @@
         },
         {
           "name": "MAIL_MCP_CACHE_PATH",
-          "description": "Token cache location. Defaults to ~/.mail-mcp/token-cache.json.",
+          "description": "Optional. Absolute path of the token cache file. Unset or empty: ~/.mail-mcp/token-cache.json. On macOS and Linux, the sign-in is not saved in a folder that belongs to another user or that other users can write to.",
           "isRequired": false,
           "isSecret": false,
           "format": "filepath"

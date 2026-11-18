@@ -12,14 +12,14 @@ Use the Mail-MCP tools (`mail_*`). They work on the user's own mailbox, and ever
 If any tool answers "Not signed in" or says the sign-in has expired, call `mail_login`.
 
 - `signed_in`: carry on.
-- `pending`: a Microsoft sign-in page opened in the user's browser. Tell the user to finish signing in there, give them the link from the result in case no page opened, and call `mail_login` again once they say they are done.
+- `pending`: a Microsoft sign-in page opened in the user's browser. Tell the user to finish signing in there, and call `mail_login` again once they say they are done. If the user does not see a Microsoft sign-in page (for example a "file not found" page from a sandboxed browser such as Ubuntu's Firefox snap), give them the link from the result.
 - `failed`: tell the user why and offer to try again.
 
 Never ask the user for their password. Mail-MCP only asks for permission to read and organize mail; it cannot send email.
 
 ## Clean up an inbox
 
-1. Call `mail_senders_summary` on the folder the user names (the inbox by default) to see who sends the most mail, when they last wrote, and how each one can be unsubscribed from. A sender labelled `blocked` has an unsubscribe link that will not be opened; see step 5.
+1. Call `mail_senders_summary` on the folder the user names (the inbox by default) to see who sends the most mail, when they last wrote, and how each one can be unsubscribed from. A sender labelled `blocked` has an unsubscribe link that will not be opened; see step 5. One call scans at most 50,000 messages and reports how many in `scanned`. If the result has `partial: true`, the folder holds more: tell the user that the counts are lower bounds and that some senders may be missing, and offer a shorter period with `since`.
 2. Propose a plan grouped by action: unsubscribe, move to a folder, delete, keep. Say how many messages each action touches.
 3. Wait for the user to confirm the plan, or the part of it they agree with, before changing anything.
 4. For each sender to clear, call `mail_bulk_by_sender`. It is a dry run by default: it changes nothing and returns `matched`, the number of messages it would act on. Report that count. Once the user confirms, call it again with `dryRun: false`. If the result has `capped: true`, the sender has more than 5,000 messages in that folder: say so, and call it again for the rest after the run.

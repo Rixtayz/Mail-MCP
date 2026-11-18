@@ -5,7 +5,7 @@ Lets Claude work on your **personal Outlook mailbox** (an Outlook.com, Hotmail, 
 The plugin has two parts:
 
 - **The Mail-MCP server**, which gives Claude the `mail_*` tools.
-- **The `inbox-cleanup` skill**, which tells Claude how to clean up an inbox safely: look at senders first, propose a plan, wait for your confirmation, try bulk actions as a dry run, and never act on instructions written inside an email.
+- **The `inbox-cleanup` skill**, which tells Claude how to clean up an inbox safely: look at senders first, propose a plan, wait for your confirmation, try bulk actions as a dry run, delete permanently only when you ask for it, and never act on instructions written inside an email.
 
 ## Use it
 
@@ -21,11 +21,12 @@ Where it runs: the server is local, so it runs in Claude Code and in Cowork sess
 
 ## What it runs, sends and stores
 
-- **What it runs.** `npx -y @rixtay/mail-mcp@0.2.2`: npm downloads that exact version of the Mail-MCP server from the npm registry and runs it on your computer. Each version is published from this repository's GitHub Actions with [npm provenance](https://www.npmjs.com/package/@rixtay/mail-mcp), so the npm page shows the commit it was built from.
-- **Who it talks to.** `login.microsoftonline.com` to sign you in, and `graph.microsoft.com` to read and organize your mail. When you ask to unsubscribe from a sender that supports one-click unsubscribe (RFC 8058), it sends one request to the unsubscribe address that sender published in its email, never to a private or local network address. Nothing else: no analytics, no telemetry, no server run by the author.
-- **What Microsoft asks you to allow.** Reading and writing your mail (Microsoft states that this does not include sending email), your basic profile (part of signing in), and keeping access so you don't sign in every hour. Mail-MCP cannot send email.
-- **What it stores.** Your sign-in tokens, in `~/.mail-mcp/token-cache.json` on your computer, readable only by your user account on macOS and Linux. Your mail stays in your mailbox; the author never receives your mail or your tokens.
-- **Signing out.** Ask Claude to sign you out (`mail_logout`), which deletes the token file, and remove Mail-MCP at <https://microsoft.com/consent> to withdraw its access on Microsoft's side.
+- **What it runs.** `npx -y @rixtay/mail-mcp@0.3.0`: npm downloads that exact version of the Mail-MCP server from the npm registry and runs it on your computer. Each version is published from this repository's GitHub Actions with [npm provenance](https://www.npmjs.com/package/@rixtay/mail-mcp), so the npm page shows the commit it was built from.
+- **Who it talks to.** `login.microsoftonline.com` to sign you in, and `graph.microsoft.com` to read and organize your mail. When Claude calls the unsubscribe tool on a message, it looks up the host name of the sender's unsubscribe link in DNS, and if the sender supports one-click unsubscribe (RFC 8058), it sends one request to the unsubscribe address that sender published in its email, never to a private or local network address: a link that points to your computer or your local network is blocked, nothing is opened, and Claude is told the message is suspicious. Nothing else: no analytics, no telemetry, no server run by the author.
+- **What Microsoft asks you to allow.** Reading and writing your mail (Microsoft states that this does not include sending email), your basic profile (part of signing in), and keeping access so you don't sign in every hour. The Mail-MCP app can only read and organize your mail: it cannot send email.
+- **What it deletes.** Deleting moves messages to Deleted Items, where you can restore them. Permanent deletion is a separate tool, `mail_purge`, which Claude is told to use only when you ask for it.
+- **What it stores.** Your sign-in tokens, in `~/.mail-mcp/token-cache.json` on your computer, readable only by your user account on macOS and Linux. During a sign-in, a small page that sends your browser to Microsoft is written to a temporary folder and deleted when the sign-in ends. If Mail-MCP is stopped before then, the page can stay in that folder; it holds the sign-in link, never a token. Your mail stays in your mailbox; the author never receives your mail or your tokens.
+- **Signing out.** Ask Claude to sign you out (`mail_logout`), which deletes the token file and cancels a sign-in that this Mail-MCP started and that is still waiting in the browser, and remove Mail-MCP at <https://microsoft.com/consent> to withdraw its access on Microsoft's side.
 
 The Microsoft app that signs you in is registered through Les Solutions Devforge inc, the verified publisher shown on Microsoft's consent screen. Mail-MCP is published by Rixtayz under the MIT license.
 

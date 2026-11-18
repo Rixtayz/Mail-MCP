@@ -10,7 +10,7 @@ const READS_EMAIL = { readOnlyHint: true, destructiveHint: false, idempotentHint
 const SCAN_LIMIT_TEXT = SCAN_LIMIT.toLocaleString("en-US");
 const PARTIAL =
   `Partial: the folder holds more than ${SCAN_LIMIT_TEXT} messages, the most one call scans, ` +
-  "so counts are lower bounds and some senders are missing. Pass `since` to scan a shorter period.";
+  "so counts are lower bounds and some senders may be missing. Pass `since` to scan a shorter period.";
 
 const SummarySchema = z.object({
   id: z.string(),
@@ -141,12 +141,12 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
     {
       title: "Summary by sender",
       description:
-        "KEY TOOL FOR TRIAGE. Scans a whole folder (Inbox by default) and aggregates messages by sender: count, unread, latest message, " +
+        `KEY TOOL FOR TRIAGE. Scans a folder (Inbox by default, up to ${SCAN_LIMIT_TEXT} messages) and aggregates messages by sender: count, unread, latest message, ` +
         "and for the `top` senders the unsubscribe method mail_unsubscribe would use: one-click, browser (a link to open), " +
         "mailto (a link the user sends from their own mail app), blocked (nothing to open: a link to this computer or the local network, " +
         "a sign of a suspicious message, or a plain http link with no email address to use instead) or none. " +
         "A link's host name is only checked when mail_unsubscribe runs, so a one-click or browser sender can still turn out blocked then. Sorted by volume. " +
-        `It scans at most ${SCAN_LIMIT_TEXT} messages: \`partial: true\` means the folder holds more, so counts are lower bounds; pass \`since\` to scan a shorter period. ` +
+        `\`partial: true\` means the folder holds more than ${SCAN_LIMIT_TEXT} messages, so counts are lower bounds and some senders may be missing; pass \`since\` to scan a shorter period. ` +
         "The scan is cached for the session. Follow up with mail_unsubscribe(lastMessageId) and mail_bulk_by_sender(address).",
       inputSchema: z
         .object({
@@ -183,7 +183,8 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
           (s, i) =>
             `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} unread), latest ${s.lastReceived.slice(0, 10)} "${s.lastSubject}" | unsubscribe: ${s.unsubscribe?.method ?? "none"} | lastMessageId: \`${s.lastMessageId}\``,
         );
-        const text = `${r.scanned} messages scanned, ${r.totalSenders} senders.${r.partial ? ` ${PARTIAL}` : ""} Top ${senders.length}:\n${lines.join("\n")}`;
+        const count = (n: number) => n.toLocaleString("en-US");
+        const text = `${count(r.scanned)} messages scanned, ${count(r.totalSenders)} senders.${r.partial ? ` ${PARTIAL}` : ""} Top ${senders.length}:\n${lines.join("\n")}`;
         return ok(text, { ...r, senders });
       }),
   );
