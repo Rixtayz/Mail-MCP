@@ -100,6 +100,17 @@ describe("bodyToText drops content hidden from the reader", () => {
     expect(t).toBe("Before\n\nAfter");
   });
 
+  // A head left open holds the rest of the email as html-to-text reads it, and is dropped whole: a browser
+  // hides these elements there too, and they are not dropped one by one yet.
+  it.each([
+    ["noframes", "<html><head><noframes>SECRET</noframes></head><body><p>x</p></body></html>"],
+    ["noframes after other content", "<html><head><p>x</p><noframes>SECRET</noframes></html>"],
+    ["iframe", "<html><head><iframe>SECRET</iframe><p>x</p></html>"],
+    ["object", "<html><head><object>SECRET</object><p>x</p></html>"],
+  ])("a head left open, with %s in it", (_label, body) => {
+    expect(html(body)).not.toContain("SECRET");
+  });
+
   it.each([
     ["max-height:0 without overflow:hidden", '<div style="max-height:0">SHOWN</div>'],
     ["overflow:hidden without a zero height", '<div style="height:20px;overflow:hidden">SHOWN</div>'],
