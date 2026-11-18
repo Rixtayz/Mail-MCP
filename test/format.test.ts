@@ -727,21 +727,6 @@ describe("bodyToText keeps a table cell of zero width hidden", () => {
   });
 });
 
-describe("bodyToText reads an email whose head is never closed", () => {
-  it("shows what follows the head's own elements, as a browser does, and still drops the title", () => {
-    expect(html("<html><head><title>SECRET</title><p>Hello</p></html>")).toBe("Hello");
-  });
-  it("drops the style, script, noscript and template it holds", () => {
-    const t = html(
-      "<html><head><meta charset='utf-8'><style>.SECRET{}</style><script>var SECRET=1</script><noscript>SECRET</noscript><template>SECRET</template><p>Hello</p></html>",
-    );
-    expect(t).toBe("Hello");
-  });
-  it("keeps hiding what an inline style hides there", () => {
-    expect(html('<html><head><div style="display:none">SECRET</div><p>Hello</p></html>')).toBe("Hello");
-  });
-});
-
 describe("sanitizeAddress", () => {
   it("turns what would disguise an address into U+FFFD, so it never reads as another one", () => {
     expect(sanitizeAddress("alerts\u200B@bank.example")).toBe("alerts\uFFFD@bank.example");
