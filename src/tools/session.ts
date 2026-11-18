@@ -79,7 +79,7 @@ export function registerSessionTools(server: McpServer, session: SessionService)
           return ok(detail, { status: "signed_in", account: r.account, detail });
         }
         if (r.status === "pending") {
-          const detail = `A Microsoft sign-in page was opened in the user's browser. Ask them to finish signing in there, then call mail_login again. If no page opened, give them this link: ${r.url}`;
+          const detail = `A Microsoft sign-in page was opened in the user's browser. Ask them to finish signing in there, then call mail_login again. If the user does not see a Microsoft sign-in page (for example a 'file not found' page from a sandboxed browser such as Ubuntu's Firefox snap), give them this link: ${r.url}`;
           return ok(detail, { status: "pending", url: r.url, detail });
         }
         const detail = `Sign-in did not complete: ${r.detail} Call mail_login to try again.`;

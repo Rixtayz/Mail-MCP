@@ -1,8 +1,8 @@
 import { PublicClientApplication, type AccountInfo, type ICachePlugin, type TokenCacheContext } from "@azure/msal-node";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { AUTHORITY, DEFAULT_CLIENT_ID, SCOPES } from "./constants.js";
 
 export class AuthError extends Error {}
@@ -88,6 +88,7 @@ export class FileCachePlugin implements ICachePlugin {
     await checkCacheFolder(folder, this.inDefaultFolder);
     await replaceFile(this.path, ctx.tokenCache.serialize());
     this.seenFile = true;
+    await removeTempFiles(this.path, STALE_TEMP_MS);
   }
 }
 
@@ -117,6 +118,11 @@ async function checkCacheFolder(folder: string, makePrivate: boolean): Promise<v
   }
 }
 
+/** The name replaceFile() gives a temporary file, after the cache file's own name: `.<16 lowercase hex>.tmp`. */
+const TEMP_SUFFIX = /^\.[0-9a-f]{16}\.tmp$/;
+/** A temporary file older than this was left by a crash; a younger one may be another process's save in progress. */
+const STALE_TEMP_MS = 60_000;
+
 /**
  * Writes data to a new 0600 file next to path, then renames it over path. A symlink at path is replaced, never
  * followed, and a reader never sees half a file. The temporary file is removed if anything fails.
@@ -129,6 +135,34 @@ async function replaceFile(path: string, data: string): Promise<void> {
   } catch (err) {
     await rm(temp, { force: true }).catch(() => {});
     throw err;
+  }
+}
+
+/**
+ * Deletes the temporary files that a save cut short by a crash left next to the cache file: they hold tokens.
+ * Only regular files in the cache's own folder whose name is the cache file's name plus exactly replaceFile()'s
+ * suffix, and at least minAgeMs old. A symlink or a folder is never touched, and unlink never follows a link.
+ * Best effort: never throws.
+ */
+async function removeTempFiles(path: string, minAgeMs: number): Promise<void> {
+  const folder = dirname(path);
+  const cacheName = basename(path);
+  let names: string[];
+  try {
+    names = await readdir(folder);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(cacheName) || !TEMP_SUFFIX.test(name.slice(cacheName.length))) continue;
+    const file = join(folder, name);
+    try {
+      const info = await lstat(file);
+      if (!info.isFile() || Date.now() - info.mtimeMs < minAgeMs) continue;
+      await unlink(file);
+    } catch {
+      // Gone already, or not removable: leave it.
+    }
   }
 }
 
@@ -178,7 +212,9 @@ export async function getAccessToken(): Promise<string> {
   try {
     const result = await getClient().acquireTokenSilent({ account, scopes: SCOPES });
     return result.accessToken;
-  } catch {
+  } catch (err) {
+    // An AuthError is the cache refusing a save (its folder is unsafe): say so, or the user signs in again for nothing.
+    if (err instanceof AuthError) throw err;
     throw new AuthError(SIGN_IN_EXPIRED);
   }
 }
@@ -199,7 +235,10 @@ export async function signedInAccount(): Promise<string | undefined> {
   }
 }
 
-/** Removes every account from the MSAL cache and deletes the cache file. Returns the account that was there, if any. */
+/**
+ * Removes every account from the MSAL cache, deletes the cache file and any temporary file a crashed save left
+ * next to it, so no token stays on disk. Returns the account that was there, if any.
+ */
 export async function logout(): Promise<{ account?: string }> {
   let account: string | undefined;
   try {
@@ -210,7 +249,9 @@ export async function logout(): Promise<{ account?: string }> {
     for (const a of accounts) await cache.removeAccount(a);
   } finally {
     resetClient();
-    await rm(cachePath(), { force: true });
+    const path = cachePath();
+    await rm(path, { force: true });
+    await removeTempFiles(path, 0);
   }
   return account === undefined ? {} : { account };
 }

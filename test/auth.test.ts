@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,6 +11,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
@@ -119,15 +121,22 @@ const OTHER_CLIENT = "11111111-2222-3333-4444-555555555555";
 
 type SerializedCache = Record<"Account" | "IdToken" | "AccessToken" | "RefreshToken" | "AppMetadata", Record<string, object>>;
 
+const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+
+/** An unsigned ID token, as MSAL caches and parses it (it does not check signatures). */
+function idTokenFor(client: string, uid = UID, username = "a@outlook.com"): string {
+  const now = Math.floor(Date.now() / 1000);
+  return `${b64({ alg: "none", typ: "JWT" })}.${b64({
+    ver: "2.0", iss: `https://login.microsoftonline.com/${MSA_TENANT}/v2.0`, aud: client, tid: MSA_TENANT,
+    oid: uid, sub: "placeholder-subject", preferred_username: username, name: "A", iat: now, exp: now + 3600,
+  })}.`;
+}
+
 function cacheObject(client: string, uid = UID, username = "a@outlook.com"): SerializedCache {
   const home = `${uid}.${MSA_TENANT}`;
   const now = Math.floor(Date.now() / 1000);
   const target = "mail.readwrite openid profile";
-  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const idToken = `${b64({ alg: "none", typ: "JWT" })}.${b64({
-    ver: "2.0", iss: `https://login.microsoftonline.com/${MSA_TENANT}/v2.0`, aud: client, tid: MSA_TENANT,
-    oid: uid, sub: "placeholder-subject", preferred_username: username, name: "A", iat: now, exp: now + 3600,
-  })}.`;
+  const idToken = idTokenFor(client, uid, username);
   return {
     Account: {
       [`${home}-${ENV}-${MSA_TENANT}`]: {
@@ -169,6 +178,43 @@ function staleThenSignedIn(): string {
   const keys = Object.keys(current) as (keyof SerializedCache)[];
   return JSON.stringify(Object.fromEntries(keys.map((k) => [k, { ...stale[k], ...current[k] }])));
 }
+
+const TWO_MINUTES_AGO = () => new Date(Date.now() - 120_000);
+const LEFTOVER_FOLDER = "token-cache.json.aaaaaaaaaaaaaaaa.tmp";
+
+/** Temporary files a crash of the cache writer can leave next to token-cache.json, and look-alikes that are not its own. */
+const leftovers = {
+  STALE: "token-cache.json.0123456789abcdef.tmp",
+  FRESH: "token-cache.json.fedcba9876543210.tmp",
+  LINK: "token-cache.json.bbbbbbbbbbbbbbbb.tmp",
+  /** Other names, upper-case hex, a wrong length, a suffix, another prefix, and a folder named like a temporary file. */
+  NOT_OURS: [
+    "token-cache.json.bak",
+    "token-cache.json.ABCDEF0123456789.tmp",
+    "token-cache.json.0123456789abcde.tmp",
+    "token-cache.json.0123456789abcdef.tmp.old",
+    "other.json.0123456789abcdef.tmp",
+    "xtoken-cache.json.0123456789abcdef.tmp",
+    LEFTOVER_FOLDER,
+  ],
+  /** Plants STALE, FRESH and NOT_OURS, each holding a placeholder token; all two minutes old except FRESH. */
+  plant(dir: string): void {
+    for (const name of [leftovers.STALE, leftovers.FRESH, ...leftovers.NOT_OURS]) {
+      const file = join(dir, name);
+      if (name === LEFTOVER_FOLDER) mkdirSync(file);
+      else writeFileSync(file, "placeholder-refresh-token");
+      if (name !== leftovers.FRESH) utimesSync(file, TWO_MINUTES_AGO(), TWO_MINUTES_AGO());
+    }
+  },
+  /** A two-minute-old symlink named like a temporary file, pointing at a file that must not be touched. Returns that file. */
+  plantLink(dir: string): string {
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "keep me");
+    symlinkSync(victim, join(dir, leftovers.LINK));
+    lutimesSync(join(dir, leftovers.LINK), TWO_MINUTES_AGO(), TWO_MINUTES_AGO());
+    return victim;
+  },
+};
 
 describe("with a token cache file", () => {
   let dir: string;
@@ -242,6 +288,21 @@ describe("with a token cache file", () => {
       const err = await getAccessToken().then(() => undefined, (e: unknown) => e as Error);
       expect(err?.message).not.toContain("tok123");
       expect(err?.message).toBe("Not signed in. Call the mail_login tool to sign the user in.");
+    });
+
+    it("a cache folder refusal during the silent sign-in is shown as it is, not as an expired sign-in", async () => {
+      writeFileSync(path, cacheFor(BUILT_IN));
+      const refusal = new AuthError("The sign-in was not saved: other users can write to the folder /x. Make it private.");
+      vi.spyOn(getClient(), "acquireTokenSilent").mockRejectedValue(refusal);
+      await expect(getAccessToken()).rejects.toBe(refusal);
+    });
+
+    it("any other silent sign-in failure still reads as an expired sign-in", async () => {
+      writeFileSync(path, cacheFor(BUILT_IN));
+      vi.spyOn(getClient(), "acquireTokenSilent").mockRejectedValue(new Error("invalid_grant: placeholder-detail"));
+      await expect(getAccessToken()).rejects.toThrow(
+        /^The sign-in has expired\. Call the mail_login tool to sign the user in again\.$/,
+      );
     });
   });
 
@@ -424,6 +485,20 @@ describe("with a token cache file", () => {
       expect(readFileSync(path, "utf8")).toContain("a@outlook.com");
     });
 
+    it("removes temporary cache files a crash left behind, and leaves everything else", async () => {
+      leftovers.plant(dir);
+      await save();
+      // FRESH may be a save in progress in another Mail-MCP process: only a stale one is removed here.
+      expect(readdirSync(dir).sort()).toEqual([leftovers.FRESH, ...leftovers.NOT_OURS, "token-cache.json"].sort());
+    });
+
+    it.skipIf(!POSIX)("leaves a symlink named like a temporary file alone, and its target too", async () => {
+      const victim = leftovers.plantLink(dir);
+      await save();
+      expect(lstatSync(join(dir, leftovers.LINK)).isSymbolicLink()).toBe(true);
+      expect(readFileSync(victim, "utf8")).toBe("keep me");
+    });
+
     it.skipIf(!POSIX || process.getuid?.() === 0)("refuses a folder that belongs to another user", async () => {
       // /usr belongs to root. The check refuses before anything is written; without it, the write fails anyway.
       const err = await save("/usr/mail-mcp-test-token-cache.json").then(() => undefined, (e: unknown) => e as Error);
@@ -457,6 +532,106 @@ describe("with a token cache file", () => {
       expect(await logout()).toEqual({});
       expect(existsSync(path)).toBe(false);
     });
+
+    it("leaves no temporary cache file behind, stale or fresh, and nothing else is touched", async () => {
+      writeFileSync(path, cacheFor(BUILT_IN));
+      leftovers.plant(dir);
+      expect(await logout()).toEqual({ account: "a@outlook.com" });
+      expect(readdirSync(dir).sort()).toEqual([...leftovers.NOT_OURS].sort());
+    });
+
+    it("removes leftover temporary files even when there is no cache file", async () => {
+      leftovers.plant(dir);
+      expect(await logout()).toEqual({});
+      expect(readdirSync(dir).sort()).toEqual([...leftovers.NOT_OURS].sort());
+    });
+
+    it.skipIf(!POSIX)("leaves a symlink named like a temporary file alone, and its target too", async () => {
+      writeFileSync(path, cacheFor(BUILT_IN));
+      const victim = leftovers.plantLink(dir);
+      await logout();
+      expect(lstatSync(join(dir, leftovers.LINK)).isSymbolicLink()).toBe(true);
+      expect(readFileSync(victim, "utf8")).toBe("keep me");
+    });
+  });
+});
+
+/** A cache whose access token has expired, so that a silent sign-in refreshes it with the refresh token. */
+function expiredCacheFor(client: string): string {
+  const cache = cacheObject(client);
+  const past = String(Math.floor(Date.now() / 1000) - 600);
+  for (const entry of Object.values(cache.AccessToken)) Object.assign(entry, { expires_on: past, extended_expires_on: past });
+  return JSON.stringify(cache);
+}
+
+/** Microsoft's sign-in endpoints, faked: authority discovery and a token endpoint that grants a refresh. Nothing leaves the machine. */
+function fakeMicrosoft(calls: string[]) {
+  const base = "https://login.microsoftonline.com/consumers";
+  const json = (body: object) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  return async (input: unknown) => {
+    const url = input instanceof Request ? input.url : String(input);
+    calls.push(url);
+    if (url.includes("/discovery/instance")) {
+      return json({
+        tenant_discovery_endpoint: `${base}/v2.0/.well-known/openid-configuration`,
+        metadata: [{ preferred_network: "login.microsoftonline.com", preferred_cache: "login.windows.net", aliases: ["login.microsoftonline.com", "login.windows.net"] }],
+      });
+    }
+    if (url.includes("/.well-known/openid-configuration")) {
+      return json({
+        authorization_endpoint: `${base}/oauth2/v2.0/authorize`,
+        token_endpoint: `${base}/oauth2/v2.0/token`,
+        end_session_endpoint: `${base}/oauth2/v2.0/logout`,
+        issuer: `https://login.microsoftonline.com/${MSA_TENANT}/v2.0`,
+        jwks_uri: `${base}/discovery/v2.0/keys`,
+      });
+    }
+    if (url.includes("/oauth2/v2.0/token")) {
+      return json({
+        token_type: "Bearer", scope: "Mail.ReadWrite openid profile", expires_in: 3600, ext_expires_in: 3600,
+        access_token: "placeholder-new-access-token", refresh_token: "placeholder-new-refresh-token",
+        id_token: idTokenFor(BUILT_IN), client_info: b64({ uid: UID, utid: MSA_TENANT }),
+      });
+    }
+    throw new Error(`unexpected network call in test: ${url}`);
+  };
+}
+
+describe("a silent token refresh whose save is refused", () => {
+  let dir: string;
+  let calls: string[];
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "mail-mcp-refresh-"));
+    const path = join(dir, "token-cache.json");
+    process.env.MAIL_MCP_CACHE_PATH = path;
+    delete process.env.MAIL_MCP_CLIENT_ID;
+    writeFileSync(path, expiredCacheFor(BUILT_IN));
+    resetClient();
+    calls = [];
+    vi.stubGlobal("fetch", fakeMicrosoft(calls));
+  });
+
+  afterEach(() => {
+    if (POSIX) chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+    expect(calls.every((u) => u.startsWith("https://login.microsoftonline.com/"))).toBe(true);
+  });
+
+  it("refreshes, offline, when the save works (the fixture is sound)", async () => {
+    expect(await getAccessToken()).toBe("placeholder-new-access-token");
+    expect(calls.some((u) => u.includes("/oauth2/v2.0/token"))).toBe(true);
+  });
+
+  it("MSAL passes the save's own error on, and getAccessToken shows it unchanged", async () => {
+    const refusal = new AuthError("The sign-in was not saved: a placeholder reason.");
+    vi.mocked(rename).mockRejectedValueOnce(refusal);
+    await expect(getAccessToken()).rejects.toBe(refusal);
+  });
+
+  it.skipIf(!POSIX)("a cache folder other users can write to is reported as such, at once", async () => {
+    chmodSync(dir, 0o777);
+    await expect(getAccessToken()).rejects.toThrow(/^The sign-in was not saved: other users can write to the folder /);
   });
 });
 
