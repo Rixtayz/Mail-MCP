@@ -1,7 +1,8 @@
 import { PublicClientApplication, type AccountInfo, type ICachePlugin, type TokenCacheContext } from "@azure/msal-node";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { AUTHORITY, DEFAULT_CLIENT_ID, SCOPES } from "./constants.js";
 
 export class AuthError extends Error {}
@@ -9,8 +10,24 @@ export class AuthError extends Error {}
 const NOT_SIGNED_IN = "Not signed in. Call the mail_login tool to sign the user in.";
 const SIGN_IN_EXPIRED = "The sign-in has expired. Call the mail_login tool to sign the user in again.";
 
+function defaultCachePath(): string {
+  return join(homedir(), ".mail-mcp", "token-cache.json");
+}
+
+/**
+ * The token cache file: MAIL_MCP_CACHE_PATH when it holds an absolute path, otherwise ~/.mail-mcp/token-cache.json.
+ * Unset, empty, whitespace-only, or an unsubstituted `${...}` placeholder counts as unset, as for MAIL_MCP_CLIENT_ID.
+ * A relative path is refused: it would depend on the folder the client happens to start the server in.
+ */
 export function cachePath(): string {
-  return process.env.MAIL_MCP_CACHE_PATH ?? join(homedir(), ".mail-mcp", "token-cache.json");
+  const path = (process.env.MAIL_MCP_CACHE_PATH ?? "").trim();
+  if (path === "" || path.startsWith("${")) return defaultCachePath();
+  if (!isAbsolute(path)) {
+    throw new AuthError(
+      "MAIL_MCP_CACHE_PATH is not an absolute path. Set it to a full path (a leading ~ is not expanded), or leave it empty to use ~/.mail-mcp/token-cache.json.",
+    );
+  }
+  return path;
 }
 
 /**
@@ -27,8 +44,12 @@ export function clientId(): string {
 export class FileCachePlugin implements ICachePlugin {
   /** True once this instance has read or written the file, until it finds the file gone. */
   private seenFile = false;
+  /** True when the file sits in the default ~/.mail-mcp, a folder Mail-MCP owns and may make private. */
+  private readonly inDefaultFolder: boolean;
 
-  constructor(private readonly path: string) {}
+  constructor(private readonly path: string) {
+    this.inDefaultFolder = resolve(dirname(path)) === resolve(dirname(defaultCachePath()));
+  }
 
   async beforeCacheAccess(ctx: TokenCacheContext): Promise<void> {
     let data: string;
@@ -62,10 +83,67 @@ export class FileCachePlugin implements ICachePlugin {
 
   async afterCacheAccess(ctx: TokenCacheContext): Promise<void> {
     if (!ctx.cacheHasChanged) return;
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    await writeFile(this.path, ctx.tokenCache.serialize(), { mode: 0o600 });
+    const folder = dirname(this.path);
+    await mkdir(folder, { recursive: true, mode: 0o700 });
+    await checkCacheFolder(folder, this.inDefaultFolder);
+    await replaceFile(this.path, ctx.tokenCache.serialize());
     this.seenFile = true;
-    await chmod(this.path, 0o600);
+  }
+}
+
+/**
+ * On macOS and Linux, refuses a cache folder that belongs to another user or that other users can write to:
+ * they could replace the file, or read the tokens through a file of their own. The default ~/.mail-mcp is made
+ * private (0700) first. Windows does not use these modes: the folder's own permissions apply, as before (storing
+ * the tokens in the system keychain is planned for 0.4).
+ */
+async function checkCacheFolder(folder: string, makePrivate: boolean): Promise<void> {
+  if (process.platform === "win32") return;
+  let info = await stat(folder);
+  const uid = process.getuid?.();
+  if (uid !== undefined && info.uid !== uid) {
+    throw new AuthError(
+      `The sign-in was not saved: the folder ${folder} belongs to another user. Set MAIL_MCP_CACHE_PATH to a file in a folder of your own.`,
+    );
+  }
+  if (makePrivate && (info.mode & 0o077) !== 0) {
+    await chmod(folder, 0o700);
+    info = await stat(folder);
+  }
+  if ((info.mode & 0o022) !== 0) {
+    throw new AuthError(
+      `The sign-in was not saved: other users can write to the folder ${folder}. Make it private (chmod 700), or set MAIL_MCP_CACHE_PATH to a file in a private folder.`,
+    );
+  }
+}
+
+/**
+ * Writes data to a new 0600 file next to path, then renames it over path. A symlink at path is replaced, never
+ * followed, and a reader never sees half a file. The temporary file is removed if anything fails.
+ */
+async function replaceFile(path: string, data: string): Promise<void> {
+  const temp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    await writeFile(temp, data, { flag: "wx", mode: 0o600 });
+    await renameOver(temp, path);
+  } catch (err) {
+    await rm(temp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/** rename(), retried briefly on Windows, which refuses to replace a file another program (an antivirus scan, a backup) holds open. */
+async function renameOver(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const busy = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+      if (process.platform !== "win32" || !busy || attempt >= 5) throw err;
+      await new Promise((r) => setTimeout(r, 50 * attempt));
+    }
   }
 }
 

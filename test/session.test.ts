@@ -1,7 +1,12 @@
 import { PublicClientApplication, type INetworkModule, type NetworkResponse } from "@azure/msal-node";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUTHORITY, DEFAULT_CLIENT_ID, SCOPES } from "../src/constants.js";
+import { openSignInPage, writeSignInPage } from "../src/login.js";
 import { LoginFlow, cancelLoopback, type LoginDeps } from "../src/session.js";
+import { sessionService } from "../src/tools/session.js";
 
 const URL_A =
   "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A50123";
@@ -43,7 +48,7 @@ function deps(
     },
     openBrowser: async (url) => {
       d.opened.push(url);
-      if (o.openBrowser) await o.openBrowser(url);
+      return o.openBrowser ? o.openBrowser(url) : undefined;
     },
     cancel: async (url) => {
       d.cancelled.push(url);
@@ -192,6 +197,267 @@ describe("LoginFlow", () => {
   });
 });
 
+describe("LoginFlow and the sign-in page the browser was opened on", () => {
+  /** An openBrowser that leaves a page behind and counts how often it is removed. */
+  function page() {
+    const p = { removed: 0, openBrowser: async () => async () => { p.removed++; } };
+    return p;
+  }
+
+  it("removes it when the sign-in succeeds", async () => {
+    const p = page();
+    const d = deps({ openBrowser: p.openBrowser, login: async (open) => { await open(URL_A); return { username: "a@outlook.com" }; } });
+    expect(await new LoginFlow(d).start()).toEqual({ status: "signed_in", account: "a@outlook.com" });
+    expect(p.removed).toBe(1);
+  });
+
+  it("removes it when the sign-in fails", async () => {
+    const p = page();
+    const d = deps({ openBrowser: p.openBrowser, login: async (open) => { await open(URL_A); throw new Error("access_denied"); } });
+    expect((await new LoginFlow(d).start()).status).toBe("failed");
+    expect(p.removed).toBe(1);
+  });
+
+  it("removes it when the sign-in is given up, even if the cancel fails", async () => {
+    const p = page();
+    const d = deps({
+      openBrowser: p.openBrowser,
+      login: async (open) => { await open(URL_A); return new Promise<never>(() => {}); },
+      cancel: async () => { throw new Error("ECONNREFUSED"); },
+    });
+    await new LoginFlow(d).start();
+    expect(p.removed).toBe(0);
+    await sleep(120);
+    expect(p.removed).toBe(1);
+  });
+
+  it("removes it once, however the sign-in ends", async () => {
+    const p = page();
+    const gate = deferred<{ username: string }>();
+    const d = deps({
+      openBrowser: p.openBrowser,
+      login: async (open) => { await open(URL_A); return gate.promise; },
+      cancel: async () => { gate.reject(new Error("login_timeout")); },
+    });
+    await new LoginFlow(d).start();
+    await sleep(120); // given up, then ended by the cancel
+    expect(p.removed).toBe(1);
+  });
+
+  it("a page that finishes opening after the sign-in was cancelled is removed at once", async () => {
+    let removed = 0;
+    const opening = deferred<void>();
+    const d = deps({
+      openBrowser: async () => { await opening.promise; return async () => { removed++; }; },
+      login: async (open) => { void open(URL_A); return new Promise<never>(() => {}); },
+    });
+    const flow = new LoginFlow(d);
+    expect(await flow.start()).toEqual({ status: "pending", url: URL_A });
+    await flow.cancel();
+    opening.resolve();
+    await sleep(5);
+    expect(removed).toBe(1);
+  });
+});
+
+describe("LoginFlow.cancel", () => {
+  it("ends a pending sign-in: the loopback is told to stop, and the next call starts afresh", async () => {
+    const gates = [deferred<{ username: string }>(), deferred<{ username: string }>()];
+    const d = deps({
+      login: async (open) => { await open(URL_A); return gates[d.loginCalls - 1]!.promise; },
+      cancel: async () => { gates[0]!.reject(new Error("login_timeout: Sign-in was not completed in time")); },
+    });
+    const flow = new LoginFlow(d);
+    expect(await flow.start()).toEqual({ status: "pending", url: URL_A });
+    await flow.cancel();
+    expect(d.cancelled).toEqual([URL_A]);
+    // The cancel is not reported as a failure: the next call opens a fresh sign-in.
+    expect(await flow.start()).toEqual({ status: "pending", url: URL_A });
+    expect(d.loginCalls).toBe(2);
+  });
+
+  it("resolves only once the sign-in has ended", async () => {
+    const gate = deferred<{ username: string }>();
+    const events: string[] = [];
+    const d = deps({
+      login: async (open) => { await open(URL_A); return gate.promise; },
+      cancel: async () => {
+        events.push("cancel posted");
+        setTimeout(() => { events.push("sign-in ended"); gate.reject(new Error("login_timeout")); }, 10);
+      },
+    });
+    const flow = new LoginFlow(d);
+    await flow.start();
+    await flow.cancel();
+    events.push("cancel resolved");
+    expect(events).toEqual(["cancel posted", "sign-in ended", "cancel resolved"]);
+  });
+
+  it("does nothing when no sign-in is in progress", async () => {
+    const d = deps();
+    await new LoginFlow(d).cancel();
+    expect(d.cancelled).toEqual([]);
+    expect(d.loginCalls).toBe(0);
+  });
+
+  it("before MSAL has built the URL: the browser never opens, and the sign-in is cancelled once the URL exists", async () => {
+    const urlReady = deferred<void>();
+    const gate = deferred<{ username: string }>();
+    const d = deps({
+      login: async (open) => { await urlReady.promise; await open(URL_A); return gate.promise; },
+      cancel: async () => { gate.reject(new Error("login_timeout")); },
+    });
+    d.waitMs = 5;
+    const flow = new LoginFlow(d);
+    const waiting = flow.start(); // still waiting for the URL
+    await sleep(10);
+    const cancelled = flow.cancel();
+    urlReady.resolve();
+    await cancelled;
+    expect(d.opened).toEqual([]);
+    expect(d.cancelled).toEqual([URL_A]);
+    expect((await waiting).status).toBe("failed");
+  });
+
+  it("an unreported failure is dropped, and nothing is posted to a loopback that is already closed", async () => {
+    const gates = [deferred<{ username: string }>(), deferred<{ username: string }>()];
+    const d = deps({ login: async (open) => { await open(URL_A); return gates[d.loginCalls - 1]!.promise; } });
+    const flow = new LoginFlow(d);
+    await flow.start();
+    gates[0]!.reject(new Error("access_denied"));
+    await sleep(5);
+    await flow.cancel();
+    expect(d.cancelled).toEqual([]);
+    expect((await flow.start()).status).toBe("pending"); // a fresh sign-in, not the old failure
+    expect(d.loginCalls).toBe(2);
+  });
+});
+
+describe("sessionService", () => {
+  it("logout cancels a pending sign-in, waits for it to end, then signs out", async () => {
+    const gate = deferred<{ username: string }>();
+    const events: string[] = [];
+    const d = deps({
+      login: async (open) => { await open(URL_A); return gate.promise; },
+      cancel: async () => { events.push("cancel"); gate.reject(new Error("login_timeout")); },
+    });
+    const session = sessionService(new LoginFlow(d), async () => { events.push("sign out"); return { account: "a@outlook.com" }; });
+    expect(await session.login()).toEqual({ status: "pending", url: URL_A });
+    expect(await session.logout()).toEqual({ account: "a@outlook.com" });
+    expect(events).toEqual(["cancel", "sign out"]);
+    expect(d.cancelled).toEqual([URL_A]);
+  });
+
+  it("logout with no sign-in in progress just signs out", async () => {
+    const d = deps();
+    let signedOut = 0;
+    const session = sessionService(new LoginFlow(d), async () => { signedOut++; return {}; });
+    expect(await session.logout()).toEqual({});
+    expect(signedOut).toBe(1);
+    expect(d.cancelled).toEqual([]);
+  });
+});
+
+describe("the sign-in page", () => {
+  const AUTH =
+    "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A50123&state=s%3D1&code_challenge=abc";
+
+  it("holds only a meta refresh and a link to the URL, both HTML-escaped, and no script", async () => {
+    const page = await writeSignInPage(AUTH);
+    try {
+      const html = readFileSync(page.file, "utf8");
+      const escaped = AUTH.replaceAll("&", "&amp;");
+      expect(html).toContain(`<meta http-equiv="refresh" content="0;url=${escaped}">`);
+      expect(html).toContain(`<a href="${escaped}">`);
+      expect(html.replaceAll("&amp;", "")).not.toContain("&");
+      const tags = [...html.matchAll(/<\s*([a-z!][a-z0-9-]*)/gi)].map((m) => m[1]!.toLowerCase());
+      expect(tags).toEqual(["!doctype", "meta", "meta", "title", "a"]);
+      expect(html).not.toMatch(/<script|\son\w+\s*=|javascript:/i);
+    } finally {
+      await page.remove();
+    }
+  });
+
+  it("characters special to HTML in the URL cannot leave the attribute", async () => {
+    const page = await writeSignInPage(`https://login.microsoftonline.com/x?a="><script>alert(1)</script>&b='x'`);
+    try {
+      const html = readFileSync(page.file, "utf8");
+      expect(html).not.toMatch(/<script/i);
+      const tags = [...html.matchAll(/<\s*([a-z!][a-z0-9-]*)/gi)].map((m) => m[1]!.toLowerCase());
+      expect(tags).toEqual(["!doctype", "meta", "meta", "title", "a"]);
+      expect(html.match(/"/g)?.length).toBe(8); // the attribute quotes only: charset, http-equiv, content, href
+    } finally {
+      await page.remove();
+    }
+  });
+
+  it.each(["http://login.microsoftonline.com/x", "javascript:alert(1)", "file:///etc/passwd", "not a url"])(
+    "refuses %j and writes nothing",
+    async (url) => {
+      const before = readdirSync(tmpdir()).filter((n) => n.startsWith("mail-mcp-sign-in-"));
+      await expect(writeSignInPage(url)).rejects.toThrow(/not an https address/);
+      expect(readdirSync(tmpdir()).filter((n) => n.startsWith("mail-mcp-sign-in-"))).toEqual(before);
+    },
+  );
+
+  it("lives in its own folder in the temporary folder, private on macOS and Linux (0700 folder, 0600 file)", async () => {
+    const page = await writeSignInPage(AUTH);
+    try {
+      const dir = dirname(page.file);
+      expect(dirname(dir)).toBe(tmpdir());
+      expect(relative(tmpdir(), dir)).toMatch(/^mail-mcp-sign-in-/);
+      expect(readdirSync(dir)).toEqual(["sign-in.html"]);
+      if (process.platform !== "win32") {
+        expect(statSync(dir).mode & 0o777).toBe(0o700);
+        expect(statSync(page.file).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      await page.remove();
+    }
+  });
+
+  it("remove() deletes the folder, and a second call is harmless", async () => {
+    const page = await writeSignInPage(AUTH);
+    await page.remove();
+    expect(existsSync(dirname(page.file))).toBe(false);
+    await page.remove();
+  });
+
+  it("is deleted if the process exits before the sign-in ends", async () => {
+    const before = process.listeners("exit");
+    const page = await writeSignInPage(AUTH);
+    const added = process.listeners("exit").filter((l) => !before.includes(l));
+    expect(added).toHaveLength(1);
+    (added[0] as () => void)();
+    expect(existsSync(dirname(page.file))).toBe(false);
+    await page.remove();
+    expect(process.listeners("exit")).toEqual(before);
+  });
+});
+
+describe("openSignInPage", () => {
+  const AUTH = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x&state=abc";
+
+  it("hands the opener the page's path, never the URL, and the returned function deletes the page", async () => {
+    const targets: string[] = [];
+    const remove = await openSignInPage(AUTH, async (target) => { targets.push(target); });
+    expect(targets).toHaveLength(1);
+    const file = targets[0]!;
+    expect(file).not.toMatch(/login\.microsoftonline|state|client_id/);
+    expect(file.endsWith("sign-in.html")).toBe(true);
+    expect(readFileSync(file, "utf8")).toContain("state=abc");
+    await remove();
+    expect(existsSync(dirname(file))).toBe(false);
+  });
+
+  it("deletes the page when the browser cannot be opened, and passes the error on", async () => {
+    let file = "";
+    await expect(openSignInPage(AUTH, async (target) => { file = target; throw new Error("no display"); })).rejects.toThrow("no display");
+    expect(file).not.toBe("");
+    expect(existsSync(dirname(file))).toBe(false);
+  });
+});
+
 describe("cancelLoopback", () => {
   it("posts an OAuth error to the loopback redirect URI", async () => {
     const seen: { url: string; init: RequestInit }[] = [];
@@ -286,4 +552,33 @@ describe("MSAL guard: the cancel trick still works with the installed @azure/msa
     await expect(fetch(`http://127.0.0.1:${redirect.port}/`, { signal: AbortSignal.timeout(1500) })).rejects.toThrow();
     expect(network.urls.filter((u) => !u.includes("openid-configuration") && !u.includes("discovery/instance"))).toEqual([]);
   }, 5000);
+
+  it("LoginFlow.cancel closes MSAL's loopback listener before it resolves", async () => {
+    const network = offlineNetwork();
+    const pca = new PublicClientApplication({
+      auth: { clientId: DEFAULT_CLIENT_ID, authority: AUTHORITY },
+      system: { networkClient: network },
+    });
+    const flow = new LoginFlow({
+      signedInAccount: async () => undefined,
+      loginInteractive: async (openBrowser) => {
+        const result = await pca.acquireTokenInteractive({ scopes: SCOPES, openBrowser });
+        return { username: result.account?.username ?? "" };
+      },
+      openBrowser: async () => {}, // no real browser
+      cancel: (authUrl) => cancelLoopback(authUrl),
+      waitMs: 1000,
+      giveUpMs: 60_000,
+    });
+    const started = await flow.start();
+    expect(started.status).toBe("pending");
+    const url = (started as { url: string }).url;
+    const redirect = new URL(new URL(url).searchParams.get("redirect_uri")!);
+
+    await flow.cancel();
+
+    // Windows can take ~2 s to refuse, hence the abort.
+    await expect(fetch(`http://127.0.0.1:${redirect.port}/`, { signal: AbortSignal.timeout(1500) })).rejects.toThrow();
+    expect(network.urls.filter((u) => !u.includes("openid-configuration") && !u.includes("discovery/instance"))).toEqual([]);
+  }, 8000);
 });

@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import open from "open";
 import * as z from "zod/v4";
 import { loginInteractive, logout, signedInAccount } from "../auth.js";
 import { CONSENT_URL, LOGIN_GIVE_UP_MS, LOGIN_WAIT_MS } from "../constants.js";
+import { openSignInPage } from "../login.js";
 import { LoginFlow, cancelLoopback, type LoginStatus } from "../session.js";
 import { ok, run } from "./shared.js";
 
@@ -19,16 +19,31 @@ export function createSessionService(): SessionService {
   const flow = new LoginFlow({
     signedInAccount,
     loginInteractive,
-    // `open` never waits for the browser itself. It resolves once the launcher has started, or on Windows once
-    // the PowerShell launcher has exited, which it does as soon as it has started the browser.
-    openBrowser: async (url) => {
-      await open(url);
-    },
+    // Opens a sign-in page holding the URL, so the URL stays off the launcher's command line. The page is
+    // deleted when the sign-in ends.
+    openBrowser: (url) => openSignInPage(url),
     cancel: (authUrl) => cancelLoopback(authUrl),
     waitMs: LOGIN_WAIT_MS,
     giveUpMs: LOGIN_GIVE_UP_MS,
   });
-  return { login: () => flow.start(), logout };
+  return sessionService(flow, logout);
+}
+
+/**
+ * Sign-in through the flow. Sign-out first cancels a sign-in still waiting in the browser and waits for it to
+ * end, so that finishing it afterwards cannot sign the user back in, then removes the stored sign-in.
+ */
+export function sessionService(
+  flow: Pick<LoginFlow, "start" | "cancel">,
+  signOut: () => Promise<{ account?: string }>,
+): SessionService {
+  return {
+    login: () => flow.start(),
+    logout: async () => {
+      await flow.cancel();
+      return signOut();
+    },
+  };
 }
 
 /** The text a logout reports, shared by the mail_logout tool and `mail-mcp logout`. */
