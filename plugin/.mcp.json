@@ -2,7 +2,7 @@
   "mcpServers": {
     "mail": {
       "command": "npx",
-      "args": ["-y", "@rixtay/mail-mcp@0.2.2"]
+      "args": ["-y", "@rixtay/mail-mcp@0.3.0"]
     }
   }
 }

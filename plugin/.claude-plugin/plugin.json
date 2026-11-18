@@ -1,7 +1,7 @@
 {
   "name": "mail-mcp",
   "displayName": "Mail-MCP",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Triage a personal Outlook mailbox (Outlook.com, Hotmail, Live, MSN) with Claude: search, read, file, delete and unsubscribe from newsletters. Runs on your computer and never sends email.",
   "author": {
     "name": "Rixtayz",
