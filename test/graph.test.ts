@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GraphClient, chunkArray, odataString } from "../src/graph.js";
+import { GraphClient, chunkArray, odataString, pathSegment } from "../src/graph.js";
 
 type Call = { url: string; init: RequestInit };
 
@@ -32,6 +32,21 @@ describe("GraphClient.request", () => {
     const r = await client(f).get<{ ok: boolean }>("/me");
     expect(r.ok).toBe(true);
     expect(calls.length).toBe(3);
+  });
+
+  it.each([
+    ["1", 1_000],
+    ["2.5", 2_500],
+    ["60", 60_000],
+    ["61", 60_000],
+    ["3600", 60_000],
+    ["1e9", 60_000],
+  ])("waits what Retry-After %s asks, but never more than 60 s", async (header, wait) => {
+    const waits: number[] = [];
+    const { f } = mockFetch((_c, n) => (n === 1 ? json({}, 503, { "Retry-After": header }) : json({ ok: true })));
+    const g = new GraphClient({ getToken: async () => "tok", fetchImpl: f, sleep: async (ms) => void waits.push(ms) });
+    await g.get("/me");
+    expect(waits).toEqual([wait]);
   });
 
   // mail_login answers "Signed in" whenever a silent token works, so a retry can hit the same error:
@@ -220,23 +235,49 @@ describe("GraphClient never sends the token outside Microsoft Graph", () => {
 });
 
 describe("GraphClient.batch", () => {
+  type Sent = { id: string; url: string };
+  const sentIn = (c: Call) => (JSON.parse(c.init.body as string) as { requests: Sent[] }).requests;
+
   it("chunks into 20, preserves order, and retries throttled sub-requests", async () => {
     let batchCalls = 0;
     const { f } = mockFetch(async (c) => {
       batchCalls++;
-      const body = JSON.parse(c.init.body as string) as { requests: { id: string }[] };
-      return json({
-        responses: body.requests.map((r) => ({ id: r.id, status: batchCalls === 1 && r.id === "r3" ? 429 : 204 })),
-      });
+      return json({ responses: sentIn(c).map((r) => ({ id: r.id, status: batchCalls === 1 && r.url === "/me/messages/3" ? 429 : 204 })) });
     });
     const reqs = Array.from({ length: 25 }, (_, i) => ({ id: `r${i}`, method: "DELETE" as const, url: `/me/messages/${i}` }));
     const res = await client(f).batch(reqs);
     expect(res.length).toBe(25);
     expect(res.map((r) => r.id)).toEqual(reqs.map((r) => r.id));
     expect(res.every((r) => r.status === 204)).toBe(true);
-    expect(batchCalls).toBe(3); // 20 + 5, then 1 retry for r3
+    expect(batchCalls).toBe(3); // 20 + 5, then 1 retry for /me/messages/3
+  });
+
+  it("sends each request under its index, whatever the caller's id, and answers under the caller's id", async () => {
+    const longId = "AAMkAGVmMDEzMTM4LTZmYWUtNDdkNC1hMDZiLTU1OGY5OTZhYmY4OABGAAAAAAAiQ8W967B7TKBjgx9rVEURBwAiIsqMbYjsT5e-T7KzowPTAAAAAAEMAAAiIsqMbYjsT5e-T7KzowPTAASoXUT3AAA=";
+    const { f, calls } = mockFetch((c) => json({ responses: sentIn(c).map((r) => ({ id: r.id, status: 200, body: { url: r.url } })) }));
+    const reqs = Array.from({ length: 22 }, (_, i) => ({ id: i === 0 ? longId : `caller-${i}`, method: "GET" as const, url: `/me/messages/m${i}` }));
+    const res = await client(f).batch(reqs);
+    expect(calls.map((c) => sentIn(c).map((r) => r.id))).toEqual([
+      Array.from({ length: 20 }, (_, i) => String(i)),
+      ["20", "21"],
+    ]);
+    expect(res.map((r) => r.id)).toEqual(reqs.map((r) => r.id));
+    expect(res.map((r) => (r.body as { url: string }).url)).toEqual(reqs.map((r) => r.url));
+  });
+
+  it("keeps a response apart from another chunk's request that shares its index", async () => {
+    // Graph answers the second chunk with an id that only the first chunk used: it must not overwrite that answer.
+    const { f } = mockFetch((c, n) =>
+      json({ responses: n === 1 ? sentIn(c).map((r) => ({ id: r.id, status: 204 })) : [{ id: "0", status: 404 }, { id: "20", status: 201 }] }),
+    );
+    const reqs = Array.from({ length: 21 }, (_, i) => ({ id: `r${i}`, method: "DELETE" as const, url: `/me/messages/${i}` }));
+    const res = await client(f).batch(reqs);
+    expect(res[0]).toEqual({ id: "r0", status: 204 });
+    expect(res[20]).toEqual({ id: "r20", status: 201 });
   });
 });
+
+const INVALID_ID = "Refused an id that is not one Microsoft Graph gave: pass ids exactly as mail_search, mail_senders_summary or mail_list_folders returned them.";
 
 describe("helpers", () => {
   it("chunkArray", () => {
@@ -244,5 +285,16 @@ describe("helpers", () => {
   });
   it("odataString escapes quotes", () => {
     expect(odataString("o'neil@x.com")).toBe("'o''neil@x.com'");
+  });
+
+  it("pathSegment keeps an id inside its one path segment", () => {
+    expect(pathSegment("AAMkADhAAAW-VPeAAA=")).toBe("AAMkADhAAAW-VPeAAA%3D");
+    expect(pathSegment("AAMkADhAAAW/VPeAAA=")).toBe("AAMkADhAAAW%2FVPeAAA%3D");
+    expect(pathSegment("a+b?c#d%2e")).toBe("a%2Bb%3Fc%23d%252e");
+    expect(pathSegment("inbox")).toBe("inbox");
+  });
+
+  it.each(["", ".", ".."])("pathSegment refuses %j, which would name another resource", (id) => {
+    expect(() => pathSegment(id)).toThrow(INVALID_ID);
   });
 });

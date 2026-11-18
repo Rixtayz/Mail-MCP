@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { BULK_LIMIT, type ActionOutcome, type MailService } from "../mail.js";
-import { ok, run } from "./shared.js";
+import { MessageId, MessageIds, ok, run } from "./shared.js";
 
 const BULK_LIMIT_TEXT = BULK_LIMIT.toLocaleString("en-US");
 const CAPPED = `This sender has more than ${BULK_LIMIT_TEXT} messages in this folder, the most one call handles:`;
@@ -23,8 +23,6 @@ function summarizeOutcomes(outcomes: ActionOutcome[], verb: string) {
   return { text, structured: { succeeded, failed, ...(moved.length ? { moved } : {}) } };
 }
 
-const Ids = z.array(z.string().min(1)).min(1).max(500).describe("Message ids (1 to 500)");
-
 export function registerActionTools(server: McpServer, mail: MailService): void {
   server.registerTool(
     "mail_move",
@@ -34,7 +32,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
         "Move one or more messages (up to 500 ids) to a folder (name, path or id). Used for filing. " +
         "NOTE: Outlook assigns a new id to every moved message; the `moved` result maps old id → new id. " +
         "To move every message from a sender, prefer mail_bulk_by_sender.",
-      inputSchema: z.object({ ids: Ids, folder: z.string().min(1).describe("Destination folder") }).strict(),
+      inputSchema: z.object({ ids: MessageIds, folder: z.string().min(1).describe("Destination folder") }).strict(),
       outputSchema: OutcomeSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -55,7 +53,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
         "Move one or more messages (up to 500 ids) to Deleted Items, where the user can restore them from Outlook " +
         "(or with mail_search folder=deleteditems then mail_move; their id changes). Never deletes permanently: " +
         "for that, use mail_purge, and only when the user explicitly asks for permanent deletion.",
-      inputSchema: z.object({ ids: Ids }).strict(),
+      inputSchema: z.object({ ids: MessageIds }).strict(),
       outputSchema: OutcomeSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -76,7 +74,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
         "Permanently delete one or more messages (up to 500 ids). This cannot be undone: the messages do not go to Deleted Items " +
         "and cannot be restored. Only use it when the user explicitly asked for these messages to be deleted permanently; " +
         "otherwise use mail_delete, which moves them to Deleted Items.",
-      inputSchema: z.object({ ids: Ids }).strict(),
+      inputSchema: z.object({ ids: MessageIds }).strict(),
       outputSchema: OutcomeSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
@@ -154,7 +152,7 @@ export function registerActionTools(server: McpServer, mail: MailService): void 
         "nothing was opened and no link is returned; tell the user what `detail` says, and treat a link to the local network as a sign of a suspicious message; " +
         "(5) `method: \"none\"` when no header exists. This tool never sends email. " +
         "Deletes nothing. Preferably pass the `lastMessageId` returned by mail_senders_summary.",
-      inputSchema: z.object({ id: z.string().min(1).describe("Id of a representative message of the newsletter") }).strict(),
+      inputSchema: z.object({ id: MessageId.describe("Id of a representative message of the newsletter") }).strict(),
       outputSchema: z.object({
         method: z.enum(["one-click", "mailto", "browser", "blocked", "none"]),
         ok: z.boolean(),

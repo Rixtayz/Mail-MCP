@@ -77,7 +77,7 @@ describe("MailService.sendersSummary", () => {
   it("aggregates by sender, sorts by volume and enriches top senders with headers via $batch", async () => {
     const { mail, calls } = service((url, init) => {
       if (url.endsWith("/$batch")) {
-        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        const reqs = JSON.parse(init.body as string).requests as { id: string; url: string }[];
         return {
           responses: reqs.map((r) => ({
             id: r.id,
@@ -85,7 +85,7 @@ describe("MailService.sendersSummary", () => {
             body: {
               id: r.id,
               internetMessageHeaders:
-                r.id === "m3"
+                r.url.startsWith("/me/messages/m3?")
                   ? [{ name: "List-Unsubscribe", value: "<https://news.example/u>" }, { name: "List-Unsubscribe-Post", value: "List-Unsubscribe=One-Click" }]
                   : [],
             },
@@ -123,7 +123,11 @@ describe("MailService actions", () => {
         const reqs = JSON.parse(init.body as string).requests as { id: string; url: string; body: { destinationId: string } }[];
         expect(reqs[0]?.url).toContain("/move");
         expect(reqs[0]?.body.destinationId).toBe(folders.value[1]!.id);
-        return { responses: reqs.map((r, i) => (i === 1 ? { id: r.id, status: 404, body: { error: { code: "ErrorItemNotFound" } } } : { id: r.id, status: 201, body: { id: "NEW_" + r.id } })) };
+        return {
+          responses: reqs.map((r, i) =>
+            i === 1 ? { id: r.id, status: 404, body: { error: { code: "ErrorItemNotFound" } } } : { id: r.id, status: 201, body: { id: "NEW_" + r.url.split("/")[3] } },
+          ),
+        };
       }
       return folders;
     });
@@ -147,6 +151,182 @@ describe("MailService actions", () => {
     await (mail.delete as (...args: unknown[]) => Promise<unknown>)(["z"], true);
     await mail.permanentDelete(["y"]);
     expect(seen).toEqual(["POST /me/messages/x/move -> deleteditems", "POST /me/messages/z/move -> deleteditems", "POST /me/messages/y/permanentDelete"]);
+  });
+});
+
+// Real message ids from the Microsoft Graph documentation (message: move, Get message).
+const DOC_ID_A = "AAMkADhAAATs28OAAA=";
+const DOC_ID_B = "AAMkADhAAAW-VPeAAA=";
+const INVALID_ID = "Refused an id that is not one Microsoft Graph gave: pass ids exactly as mail_search, mail_senders_summary or mail_list_folders returned them.";
+
+describe("MailService batches", () => {
+  /** A $batch endpoint that records the sub-requests it receives and answers each with `status`. */
+  function batchService(status: number) {
+    const sent: { id: string; method: string; url: string }[] = [];
+    const s = service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string; method: string; url: string }[];
+        sent.push(...reqs);
+        return { responses: reqs.map((r) => ({ id: r.id, status, ...(status === 201 ? { body: { id: `NEW_${r.url.split("/")[3]}` } } : {}) })) };
+      }
+      return folders;
+    });
+    return { ...s, sent };
+  }
+
+  it.each([
+    ["move", (mail: MailService, ids: string[]) => mail.move(ids, "Factures"), "move", 201],
+    ["delete", (mail: MailService, ids: string[]) => mail.delete(ids), "move", 201],
+    ["permanentDelete", (mail: MailService, ids: string[]) => mail.permanentDelete(ids), "permanentDelete", 204],
+  ] as const)("%s acts once on each distinct id, under index request ids, and answers under the message ids", async (_name, act, action, status) => {
+    const { mail, sent } = batchService(status);
+    const out = await act(mail, [DOC_ID_A, DOC_ID_B, DOC_ID_A, DOC_ID_B, DOC_ID_A]);
+    expect(sent.map((r) => [r.id, r.url])).toEqual([
+      ["0", `/me/messages/AAMkADhAAATs28OAAA%3D/${action}`],
+      ["1", `/me/messages/AAMkADhAAAW-VPeAAA%3D/${action}`],
+    ]);
+    expect(out.map((o) => o.id)).toEqual([DOC_ID_A, DOC_ID_B]);
+    expect(out.every((o) => o.ok)).toBe(true);
+    if (status === 201) expect(out.map((o) => o.newId)).toEqual(["NEW_AAMkADhAAATs28OAAA%3D", "NEW_AAMkADhAAAW-VPeAAA%3D"]);
+  });
+
+  it("sendersSummary reads each latest message's headers under index request ids", async () => {
+    const sent: { id: string; url: string }[] = [];
+    const { mail } = service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string; url: string }[];
+        sent.push(...reqs);
+        return { responses: reqs.map((r) => ({ id: r.id, status: 200, body: { internetMessageHeaders: [{ name: "List-Unsubscribe", value: "<mailto:stop@x.example>" }] } })) };
+      }
+      if (url.includes("/messages")) return { value: [msg(DOC_ID_A, "a@x.example", "s", "2025-01-01T00:00:00Z"), msg(DOC_ID_B, "b@x.example", "s", "2025-01-02T00:00:00Z")] };
+      return folders;
+    });
+    const r = await mail.sendersSummary(undefined, undefined, 10);
+    expect(sent.map((s) => s.id)).toEqual(["0", "1"]);
+    expect(r.senders.map((s) => [s.lastMessageId, s.unsubscribe?.mailto])).toEqual([
+      [DOC_ID_B, "stop@x.example"],
+      [DOC_ID_A, "stop@x.example"],
+    ]);
+  });
+});
+
+describe("MailService keeps every id inside its own path segment", () => {
+  it.each([".", "..", ""])("refuses the message id %j before any request", async (id) => {
+    const { mail, calls } = service(() => folders);
+    await expect(mail.getMessage(id)).rejects.toThrow(INVALID_ID);
+    await expect(mail.unsubscribe(id)).rejects.toThrow(INVALID_ID);
+    await expect(mail.move([DOC_ID_A, id], "inbox")).rejects.toThrow(INVALID_ID);
+    await expect(mail.delete([id])).rejects.toThrow(INVALID_ID);
+    await expect(mail.permanentDelete([id])).rejects.toThrow(INVALID_ID);
+    expect(calls).toEqual([]);
+  });
+
+  it("encodes a message id holding / + = so that it names that one message", async () => {
+    const { mail, calls } = service(() => ({ id: "x", internetMessageHeaders: [] }));
+    await mail.getMessage("AAMkADhAAAW/VPeAAA+=");
+    await mail.unsubscribe("AAMkADhAAAW/VPeAAA+=");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/v1.0/me/messages/AAMkADhAAAW%2FVPeAAA%2B%3D",
+      "/v1.0/me/messages/AAMkADhAAAW%2FVPeAAA%2B%3D",
+    ]);
+  });
+
+  // Folder ids come from Graph. Whatever they hold, each stays one segment of the path.
+  const parent = "AAMkADhAAAAAAEKAAA/+x=";
+  const child = "AAMkADcbAAAAAAEJAAA=";
+  const tree = (url: string) =>
+    url.includes("/childFolders")
+      ? { value: [{ id: child, displayName: "2025", parentFolderId: parent, childFolderCount: 0 }] }
+      : url.includes("/messages")
+        ? { value: [] }
+        : { value: [{ id: parent, displayName: "Projects", childFolderCount: 1 }] };
+
+  it("encodes folder ids wherever they enter a path", async () => {
+    const { mail, calls } = service((url, init) => ((init.method ?? "GET") === "POST" ? { id: "NEW", displayName: "Sub" } : tree(url)));
+    await mail.listFolders();
+    await mail.search({ folder: "Projects", limit: 5 });
+    await mail.sendersSummary("Projects", undefined, 5);
+    await mail.bulkBySender({ from: "news@x.example", folder: "Projects", action: "delete" });
+    await mail.createFolder("Sub", "Projects");
+    const paths = calls.map((c) => `${c.init.method ?? "GET"} ${new URL(c.url).pathname}`);
+    expect(new Set(paths)).toEqual(
+      new Set([
+        "GET /v1.0/me/mailFolders",
+        "GET /v1.0/me/mailFolders/AAMkADhAAAAAAEKAAA%2F%2Bx%3D/childFolders",
+        "GET /v1.0/me/mailFolders/AAMkADhAAAAAAEKAAA%2F%2Bx%3D/messages",
+        "POST /v1.0/me/mailFolders/AAMkADhAAAAAAEKAAA%2F%2Bx%3D/childFolders",
+      ]),
+    );
+  });
+
+  it("refuses a folder whose id would name another resource", async () => {
+    const { mail, calls } = service((url) =>
+      url.includes("/messages") ? { value: [] } : { value: [{ id: "..", displayName: "Weird", childFolderCount: 0 }] },
+    );
+    await expect(mail.search({ folder: "Weird", limit: 5 })).rejects.toThrow(INVALID_ID);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/v1.0/me/mailFolders"]);
+  });
+
+  it.each([".", "..", "/", "A".repeat(70) + "/..", "A".repeat(70) + "/x", "../" + "A".repeat(70)])(
+    "never uses %j as a folder id: it is looked up by name, and not found",
+    async (value) => {
+      const { mail, calls } = service(() => folders);
+      await expect(mail.resolveFolderId(value)).rejects.toThrow(/not found/);
+      await expect(mail.search({ folder: value, limit: 5 })).rejects.toThrow(/not found/);
+      expect(calls.every((c) => new URL(c.url).pathname === "/v1.0/me/mailFolders")).toBe(true);
+    },
+  );
+});
+
+describe("MailService.sendersSummary scan limit", () => {
+  /** A folder of `count` messages from three senders, in pages of 1,000. `pages` records each page read. */
+  function folderOf(count: number) {
+    const pages: number[] = [];
+    const s = service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        return { responses: reqs.map((r) => ({ id: r.id, status: 200, body: { internetMessageHeaders: [] } })) };
+      }
+      if (url.includes("/messages")) {
+        const page = Number(new URL(url).searchParams.get("page") ?? "0");
+        pages.push(page);
+        const value = Array.from({ length: Math.max(0, Math.min(1000, count - page * 1000)) }, (_, i) =>
+          msg(`m${page * 1000 + i}`, `s${i % 3}@x.example`, "s", "2025-01-01T00:00:00Z"),
+        );
+        const more = (page + 1) * 1000 < count;
+        return { value, ...(more ? { "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?page=${page + 1}` } : {}) };
+      }
+      return folders;
+    });
+    return { ...s, pages };
+  }
+
+  it("stops after scanning 50,000 messages and says the summary is partial, also from the cache", async () => {
+    const { mail, pages } = folderOf(120_000);
+    const r = await mail.sendersSummary(undefined, undefined, 10);
+    expect(r).toMatchObject({ scanned: 50_000, partial: true, totalSenders: 3 });
+    expect(r.senders.reduce((n, s) => n + s.count, 0)).toBe(50_000);
+    expect(pages.length).toBeLessThanOrEqual(51);
+    expect(await mail.sendersSummary(undefined, undefined, 10)).toMatchObject({ scanned: 50_000, partial: true });
+    expect(pages.length).toBeLessThanOrEqual(51);
+  });
+
+  it("is complete at exactly 50,000 messages", async () => {
+    const { mail } = folderOf(50_000);
+    expect(await mail.sendersSummary(undefined, undefined, 10)).toMatchObject({ scanned: 50_000, partial: false });
+  });
+
+  it("counts every message read, with or without a sender, also from the cache", async () => {
+    const { mail } = service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        return { responses: reqs.map((r) => ({ id: r.id, status: 200, body: { internetMessageHeaders: [] } })) };
+      }
+      if (url.includes("/messages")) return { value: [msg("m1", "a@x.example", "s", "2025-01-01T00:00:00Z"), { id: "m2", subject: "no sender" }] };
+      return folders;
+    });
+    expect(await mail.sendersSummary(undefined, undefined, 10)).toMatchObject({ scanned: 2, partial: false, totalSenders: 1 });
+    expect(await mail.sendersSummary(undefined, undefined, 10)).toMatchObject({ scanned: 2, partial: false, totalSenders: 1 });
   });
 });
 

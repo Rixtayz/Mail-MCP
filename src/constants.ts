@@ -7,6 +7,8 @@ export const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 export const CHARACTER_LIMIT = 25_000;
 export const BATCH_SIZE = 20;
 export const MAX_RETRIES = 5;
+// The longest wait a Retry-After header can impose before a retry: a larger value is cut to this.
+export const MAX_RETRY_AFTER_MS = 60_000;
 export const PAGE_SIZE_SCAN = 1000;
 export const SCOPES = ["Mail.ReadWrite"];
 export const AUTHORITY = "https://login.microsoftonline.com/consumers";

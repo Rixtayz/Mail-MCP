@@ -10,7 +10,7 @@ import {
   truncate,
   type MessageSummary,
 } from "./format.js";
-import { GraphClient, odataString } from "./graph.js";
+import { GraphClient, odataString, pathSegment } from "./graph.js";
 import type { BatchRequest, GraphHeader, GraphMailFolder, GraphMessage, UnsubscribeInfo } from "./types.js";
 import {
   buildMailtoUrl,
@@ -69,6 +69,18 @@ export interface ActionOutcome {
 
 /** The most messages mail_bulk_by_sender acts on in one call. */
 export const BULK_LIMIT = 5000;
+
+/** The most messages mail_senders_summary scans in one call. */
+export const SCAN_LIMIT = 50_000;
+
+export interface SendersSummary {
+  senders: SenderStats[];
+  /** Messages read: at most SCAN_LIMIT. */
+  scanned: number;
+  totalSenders: number;
+  /** True when the folder holds more than SCAN_LIMIT messages: only the first SCAN_LIMIT were scanned. */
+  partial: boolean;
+}
 
 export interface BulkResult {
   /** Messages acted on, or that would be with a dry run: at most BULK_LIMIT. */
@@ -149,14 +161,17 @@ function isWellKnown(s: string): boolean {
   return WELL_KNOWN.has(s.toLowerCase());
 }
 
-/** Heuristic: Graph ids are long base64-ish strings; folder names are not. */
+/**
+ * Heuristic: Graph ids are long base64-ish strings; folder names are not. A value holding a `/` or a `.`
+ * (a folder path, or a `.` or `..` segment) is never used as an id: it is looked up by name.
+ */
 function looksLikeId(s: string): boolean {
   return s.length > 60 && /^[A-Za-z0-9_=\-]+$/.test(s);
 }
 
 export class MailService {
   private folderCache?: FolderInfo[];
-  private readonly summaryCache = new Map<string, SenderStats[]>();
+  private readonly summaryCache = new Map<string, { all: SenderStats[]; scanned: number; partial: boolean }>();
 
   constructor(
     private readonly graph: GraphClient,
@@ -183,7 +198,7 @@ export class MailService {
           unread: f.unreadItemCount ?? 0,
           ...(f.wellKnownName ? { wellKnownName: f.wellKnownName } : {}),
         });
-        if ((f.childFolderCount ?? 0) > 0) await walk(`/me/mailFolders/${f.id}/childFolders`, fullPath);
+        if ((f.childFolderCount ?? 0) > 0) await walk(`/me/mailFolders/${pathSegment(f.id)}/childFolders`, fullPath);
       }
     };
     await walk("/me/mailFolders", "");
@@ -217,7 +232,7 @@ export class MailService {
       (f) => f.name.toLowerCase() === name.toLowerCase() && (!parentId || f.parentId === parentId || parent?.toLowerCase() === f.path.split("/").slice(0, -1).join("/").toLowerCase()),
     );
     if (existing) return { folder: existing, created: false };
-    const path = parentId ? `/me/mailFolders/${parentId}/childFolders` : "/me/mailFolders";
+    const path = parentId ? `/me/mailFolders/${pathSegment(parentId)}/childFolders` : "/me/mailFolders";
     const created = await this.graph.post<GraphMailFolder>(path, { displayName: name, isHidden: false });
     await this.listFolders(true);
     const folder = (await this.listFolders()).find((f) => f.id === created.id) ?? {
@@ -251,7 +266,7 @@ export class MailService {
         qs.push(`$filter=${encodeURIComponent(filters.join(" and "))}`);
         qs.push(`$orderby=${encodeURIComponent("receivedDateTime desc")}`);
       }
-      path = `/me/mailFolders/${folderId}/messages?${qs.join("&")}`;
+      path = `/me/mailFolders/${pathSegment(folderId)}/messages?${qs.join("&")}`;
     }
     const page = await this.graph.page<GraphMessage>(path);
     return { items: page.items.map(summarizeMessage), ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
@@ -270,7 +285,7 @@ export class MailService {
     unsubscribe: UnsubscribeInfo;
   }> {
     const m = await this.graph.get<GraphMessage>(
-      `/me/messages/${encodeURIComponent(id)}?$select=${LIST_SELECT},toRecipients,hasAttachments,body,internetMessageHeaders,webLink`,
+      `/me/messages/${pathSegment(id)}?$select=${LIST_SELECT},toRecipients,hasAttachments,body,internetMessageHeaders,webLink`,
       );
     const { text, truncated } = truncate(bodyToText(m.body));
     const to = (m.toRecipients ?? []).map((r) => sanitizeLine(r.emailAddress?.address ?? "", ADDRESS_MAX)).filter(Boolean);
@@ -290,7 +305,7 @@ export class MailService {
     const reqs: BatchRequest[] = ids.map((id) => ({
       id,
       method: "GET",
-      url: `/me/messages/${encodeURIComponent(id)}?$select=id,internetMessageHeaders`,
+      url: `/me/messages/${pathSegment(id)}?$select=id,internetMessageHeaders`,
     }));
     const out = new Map<string, GraphHeader[]>();
     for (const r of await this.graph.batch(reqs)) {
@@ -302,16 +317,26 @@ export class MailService {
     return out;
   }
 
-  async sendersSummary(folder: string | undefined, since: string | undefined, top: number): Promise<{ senders: SenderStats[]; scanned: number; totalSenders: number }> {
+  /**
+   * Aggregate the messages of a folder by sender, scanning at most SCAN_LIMIT of them (`partial` says when
+   * the folder holds more). The scan is cached per folder and `since`.
+   */
+  async sendersSummary(folder: string | undefined, since: string | undefined, top: number): Promise<SendersSummary> {
     const folderId = await this.resolveFolderId(folder);
     const key = `${folderId}|${since ?? ""}`;
-    let all = this.summaryCache.get(key);
-    let scanned = 0;
-    if (!all) {
+    let scan = this.summaryCache.get(key);
+    if (!scan) {
       const byAddress = new Map<string, SenderStats>();
       const qs = [`$select=${SCAN_SELECT}`, `$top=${PAGE_SIZE_SCAN}`];
       if (since) qs.push(`$filter=${encodeURIComponent(`receivedDateTime ge ${since}`)}`);
-      for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${folderId}/messages?${qs.join("&")}`)) {
+      let scanned = 0;
+      let partial = false;
+      // One more than the limit tells whether the folder holds more messages than one call scans.
+      for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${pathSegment(folderId)}/messages?${qs.join("&")}`, SCAN_LIMIT + 1)) {
+        if (scanned === SCAN_LIMIT) {
+          partial = true;
+          break;
+        }
         scanned++;
         const address = sanitizeLine(m.from?.emailAddress?.address?.toLowerCase() ?? "", ADDRESS_MAX);
         if (!address) continue;
@@ -340,26 +365,30 @@ export class MailService {
           });
         }
       }
-      all = [...byAddress.values()].sort((a, b) => b.count - a.count || (a.lastReceived < b.lastReceived ? 1 : -1));
-      this.summaryCache.set(key, all);
-    } else {
-      scanned = all.reduce((n, s) => n + s.count, 0);
+      const all = [...byAddress.values()].sort((a, b) => b.count - a.count || (a.lastReceived < b.lastReceived ? 1 : -1));
+      scan = { all, scanned, partial };
+      this.summaryCache.set(key, scan);
     }
 
-    const selected = all.slice(0, top);
+    const selected = scan.all.slice(0, top);
     const missing = selected.filter((s) => !s.unsubscribe);
     if (missing.length > 0) {
       const headers = await this.headersFor(missing.map((s) => s.lastMessageId));
       for (const s of missing) s.unsubscribe = parseListUnsubscribe(headers.get(s.lastMessageId));
     }
-    return { senders: selected, scanned, totalSenders: all.length };
+    return { senders: selected, scanned: scan.scanned, totalSenders: scan.all.length, partial: scan.partial };
   }
 
   // ---------- Actions ----------
 
-  private async runBatch(reqs: BatchRequest[]): Promise<ActionOutcome[]> {
-    if (reqs.length === 0) return [];
-    const responses = await this.graph.batch(reqs);
+  /**
+   * Send `request(id)` for each distinct id through $batch: one outcome per distinct id, in first-seen order.
+   * A repeated id is sent once, since a second request would fail on a message already moved or gone.
+   */
+  private async runBatch(ids: string[], request: (id: string) => Omit<BatchRequest, "id">): Promise<ActionOutcome[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    const responses = await this.graph.batch(unique.map((id) => ({ id, ...request(id) })));
     return responses.map((r) => {
       const ok = r.status >= 200 && r.status < 300;
       if (ok) {
@@ -374,9 +403,12 @@ export class MailService {
 
   async move(ids: string[], folder: string): Promise<ActionOutcome[]> {
     const destinationId = await this.resolveFolderId(folder);
-    return this.runBatch(
-      ids.map((id) => ({ id, method: "POST", url: `/me/messages/${encodeURIComponent(id)}/move`, body: { destinationId }, headers: { "Content-Type": "application/json" } })),
-    );
+    return this.runBatch(ids, (id) => ({
+      method: "POST",
+      url: `/me/messages/${pathSegment(id)}/move`,
+      body: { destinationId },
+      headers: { "Content-Type": "application/json" },
+    }));
   }
 
   /**
@@ -389,7 +421,7 @@ export class MailService {
 
   /** Permanent deletion (Graph permanentDelete): irreversible. Only the mail_purge tool calls it. */
   async permanentDelete(ids: string[]): Promise<ActionOutcome[]> {
-    return this.runBatch(ids.map((id) => ({ id, method: "POST" as const, url: `/me/messages/${encodeURIComponent(id)}/permanentDelete` })));
+    return this.runBatch(ids, (id) => ({ method: "POST", url: `/me/messages/${pathSegment(id)}/permanentDelete` }));
   }
 
   /**
@@ -401,7 +433,7 @@ export class MailService {
     const filter = encodeURIComponent(`from/emailAddress/address eq ${odataString(from.toLowerCase())}`);
     const ids: string[] = [];
     // One more than the limit tells whether the sender has more messages than one call handles.
-    for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${folderId}/messages?$select=id&$top=${PAGE_SIZE_SCAN}&$filter=${filter}`, maxItems + 1)) {
+    for await (const m of this.graph.paginate<GraphMessage>(`/me/mailFolders/${pathSegment(folderId)}/messages?$select=id&$top=${PAGE_SIZE_SCAN}&$filter=${filter}`, maxItems + 1)) {
       ids.push(m.id);
     }
     const capped = ids.length > maxItems;
@@ -431,7 +463,7 @@ export class MailService {
   }
 
   async unsubscribe(id: string): Promise<UnsubscribeOutcome> {
-    const m = await this.graph.get<GraphMessage>(`/me/messages/${encodeURIComponent(id)}?$select=id,subject,from,internetMessageHeaders`);
+    const m = await this.graph.get<GraphMessage>(`/me/messages/${pathSegment(id)}?$select=id,subject,from,internetMessageHeaders`);
     const info = parseListUnsubscribe(m.internetMessageHeaders);
     const base = { from: sanitizeLine(m.from?.emailAddress?.address ?? "", ADDRESS_MAX), subject: sanitizeLine(m.subject ?? "", SUBJECT_MAX) };
 

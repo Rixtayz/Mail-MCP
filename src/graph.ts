@@ -1,4 +1,4 @@
-import { BATCH_SIZE, GRAPH_BASE, MAX_RETRIES } from "./constants.js";
+import { BATCH_SIZE, GRAPH_BASE, MAX_RETRIES, MAX_RETRY_AFTER_MS } from "./constants.js";
 import type { BatchRequest, BatchResponse, GraphPage } from "./types.js";
 
 export class GraphError extends Error {
@@ -118,7 +118,8 @@ export class GraphClient {
       if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < MAX_RETRIES) {
         attempt++;
         const retryAfter = Number(res.headers.get("Retry-After"));
-        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : Math.min(2 ** attempt * 500, 10_000);
+        const delay =
+          Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, MAX_RETRY_AFTER_MS) : Math.min(2 ** attempt * 500, 10_000);
         await this.sleep(delay);
         continue;
       }
@@ -176,12 +177,15 @@ export class GraphClient {
   }
 
   /**
-   * Execute requests through /$batch in serialized chunks of 20.
-   * Returns one response per request id, in input order. Retries throttled sub-requests.
+   * Execute requests through /$batch in serialized chunks of 20. Retries throttled sub-requests.
+   * Each request goes to Graph under its index ("0", "1", …), never under the caller's id: Graph fails the
+   * whole batch (400) unless its ids are unique, compared without case, and a caller's id, such as a
+   * case-sensitive message id, need not be.
+   * Returns one response per request, in input order, under the caller's id.
    */
   async batch(requests: BatchRequest[]): Promise<BatchResponse[]> {
     const results = new Map<string, BatchResponse>();
-    let pending = requests.map((r) => ({ ...r, url: r.url.startsWith("/") ? r.url : `/${r.url}` }));
+    let pending = requests.map((r, i) => ({ ...r, id: String(i), url: r.url.startsWith("/") ? r.url : `/${r.url}` }));
     let attempt = 0;
 
     while (pending.length > 0) {
@@ -189,12 +193,10 @@ export class GraphClient {
       for (const chunk of chunkArray(pending, BATCH_SIZE)) {
         const res = await this.post<{ responses: BatchResponse[] }>("/$batch", { requests: chunk });
         for (const r of res.responses) {
-          if ((r.status === 429 || r.status === 503) && attempt < MAX_RETRIES) {
-            const original = chunk.find((c) => c.id === r.id);
-            if (original) retry.push(original);
-          } else {
-            results.set(r.id, r);
-          }
+          const original = chunk.find((c) => c.id === r.id);
+          if (!original) continue; // answers no request of this chunk
+          if ((r.status === 429 || r.status === 503) && attempt < MAX_RETRIES) retry.push(original);
+          else results.set(r.id, r);
         }
       }
       if (retry.length === 0) break;
@@ -204,7 +206,7 @@ export class GraphClient {
     }
     // Anything still pending after retries is reported as 429.
     for (const p of pending) if (!results.has(p.id)) results.set(p.id, { id: p.id, status: 429 });
-    return requests.map((r) => results.get(r.id) ?? { id: r.id, status: 0 });
+    return requests.map((r, i) => ({ ...(results.get(String(i)) ?? { status: 0 }), id: r.id }));
   }
 }
 
@@ -212,6 +214,19 @@ export function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+const INVALID_ID =
+  "Refused an id that is not one Microsoft Graph gave: pass ids exactly as mail_search, mail_senders_summary or mail_list_folders returned them.";
+
+/**
+ * A message or folder id as one segment of a Graph path. Encoded, so that a `/`, `?`, `#` or `%` in it stays
+ * part of the segment. `.`, `..` and an empty id are refused: encoding leaves them as they are, and a URL
+ * reads them as this level, the level above, or no segment, so the path would name another resource.
+ */
+export function pathSegment(id: string): string {
+  if (id === "" || id === "." || id === "..") throw new GraphError(INVALID_ID, 0);
+  return encodeURIComponent(id);
 }
 
 /** Escape a string literal for use inside an OData $filter. */
