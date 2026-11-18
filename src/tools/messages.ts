@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { frameUntrusted, messagesToMarkdown } from "../format.js";
+import { frameUntrusted, messagesToMarkdown, SENDERS_NOTICE } from "../format.js";
 import { SCAN_LIMIT, unsubscribeOptions, type MailService, type UnsubscribeOptions } from "../mail.js";
 import { MessageId, ok, run } from "./shared.js";
 
@@ -184,7 +184,8 @@ export function registerMessageTools(server: McpServer, mail: MailService): void
             `${i + 1}. ${s.name ? s.name + " " : ""}<${s.address}> — ${s.count} msgs (${s.unreadCount} unread), latest ${s.lastReceived.slice(0, 10)} "${s.lastSubject}" | unsubscribe: ${s.unsubscribe?.method ?? "none"} | lastMessageId: \`${s.lastMessageId}\``,
         );
         const count = (n: number) => n.toLocaleString("en-US");
-        const text = `${count(r.scanned)} messages scanned, ${count(r.totalSenders)} senders.${r.partial ? ` ${PARTIAL}` : ""} Top ${senders.length}:\n${lines.join("\n")}`;
+        const list = lines.length > 0 ? `${SENDERS_NOTICE}\n${lines.join("\n")}` : "";
+        const text = `${count(r.scanned)} messages scanned, ${count(r.totalSenders)} senders.${r.partial ? ` ${PARTIAL}` : ""} Top ${senders.length}:\n${list}`;
         return ok(text, { ...r, senders });
       }),
   );
