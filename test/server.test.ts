@@ -606,7 +606,7 @@ describe("session tools over the wire", () => {
     const res = await request("tools/call", { name: "mail_login", arguments: {} });
     expect(res.result?.structuredContent).toMatchObject({ status: "pending", url });
     expect(res.result?.content[0].text).toBe(
-      `A Microsoft sign-in page was opened in the user's browser. Ask them to finish signing in there, then call mail_login again. If no page opened, give them this link: ${url}`,
+      `A Microsoft sign-in page was opened in the user's browser. Ask them to finish signing in there, then call mail_login again. If the user does not see a Microsoft sign-in page (for example a 'file not found' page from a sandboxed browser such as Ubuntu's Firefox snap), give them this link: ${url}`,
     );
     await close();
   });

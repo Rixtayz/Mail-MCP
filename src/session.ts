@@ -11,7 +11,8 @@ export type LoginStatus =
 export interface LoginDeps {
   signedInAccount(): Promise<string | undefined>;
   loginInteractive(openBrowser: (url: string) => Promise<void>): Promise<{ username: string }>;
-  openBrowser(url: string): Promise<void>;
+  /** Opens the URL in the browser. May resolve to a function that removes what opening left behind (a sign-in page), run when the sign-in ends. */
+  openBrowser(url: string): Promise<(() => Promise<void>) | void>;
   cancel(authUrl: string): Promise<void>;
   waitMs: number; // production: LOGIN_WAIT_MS
   giveUpMs: number; // production: LOGIN_GIVE_UP_MS
@@ -25,8 +26,14 @@ interface Flight {
   urlKnown: Promise<string>;
   /** Resolves, never rejects, when the sign-in ends. */
   done: Promise<Outcome>;
+  url?: string;
   outcome?: Outcome;
   giveUpTimer?: NodeJS.Timeout;
+  /** Given up or cancelled: MSAL's loopback has been, or will be, told to stop. */
+  abandoned?: true;
+  /** What openBrowser left behind, removed when the sign-in ends or is abandoned. */
+  leftovers: (() => Promise<void>)[];
+  tidied?: true;
 }
 
 export class LoginFlow {
@@ -45,23 +52,45 @@ export class LoginFlow {
     return this.report(this.flight ?? this.begin());
   }
 
+  /**
+   * Cancels the sign-in in progress, if any, the way a give-up does, and resolves once it has ended (or after
+   * waitMs): MSAL's loopback listener is closed, so finishing the sign-in in the browser afterwards cannot sign
+   * the user in. mail_logout calls this first. If MSAL has not built the sign-in URL yet, the browser never opens.
+   */
+  async cancel(): Promise<void> {
+    const flight = this.flight;
+    if (!flight) return;
+    await this.abandon(flight);
+    await within(flight.done, this.deps.waitMs);
+  }
+
   private begin(): Flight {
     let urlKnown!: (url: string) => void;
     let done!: (outcome: Outcome) => void;
     const flight: Flight = {
       urlKnown: new Promise<string>((resolve) => { urlKnown = resolve; }),
       done: new Promise<Outcome>((resolve) => { done = resolve; }),
+      leftovers: [],
     };
-    let url: string | undefined;
     const openBrowser = async (authUrl: string): Promise<void> => {
-      if (url === undefined) {
-        url = authUrl;
+      if (flight.url === undefined) {
+        flight.url = authUrl;
+        if (flight.abandoned) {
+          // Cancelled before MSAL built the URL: stop the loopback now, and open nothing.
+          await quietly(() => this.deps.cancel(authUrl));
+          return;
+        }
         urlKnown(authUrl);
-        flight.giveUpTimer = setTimeout(() => this.giveUp(flight, authUrl), this.deps.giveUpMs);
+        flight.giveUpTimer = setTimeout(() => void this.abandon(flight), this.deps.giveUpMs);
         flight.giveUpTimer.unref();
       }
+      if (flight.abandoned) return;
       try {
-        await this.deps.openBrowser(authUrl);
+        const leftover = await this.deps.openBrowser(authUrl);
+        if (leftover) {
+          flight.leftovers.push(leftover);
+          if (flight.tidied) this.tidy(flight); // the sign-in ended while the browser was opening
+        }
       } catch {
         // No browser (headless, no display…): the URL is still handed to the assistant.
       }
@@ -69,6 +98,7 @@ export class LoginFlow {
     const end = (outcome: Outcome): void => {
       clearTimeout(flight.giveUpTimer);
       flight.outcome = outcome;
+      this.tidy(flight);
       // A success needs no report (the next call finds the account); a failure waits for one.
       if (outcome.ok && this.flight === flight) this.flight = undefined;
       done(outcome);
@@ -82,12 +112,25 @@ export class LoginFlow {
   }
 
   /**
-   * Abandons a sign-in nobody finished: frees MSAL's loopback port, and lets the next call start afresh.
-   * Silent: the cancellation is not reported as a failure. A call waiting at this moment sees the sign-in end.
+   * Abandons a sign-in nobody finished (the give-up timer, or cancel()): frees MSAL's loopback port, removes the
+   * sign-in page, and lets the next call start afresh. Silent: the cancellation is not reported as a failure.
+   * A call waiting at this moment sees the sign-in end. Resolves once the loopback has been told to stop.
    */
-  private giveUp(flight: Flight, authUrl: string): void {
+  private async abandon(flight: Flight): Promise<void> {
     if (this.flight === flight) this.flight = undefined;
-    void quietly(() => this.deps.cancel(authUrl));
+    if (flight.abandoned) return;
+    flight.abandoned = true;
+    clearTimeout(flight.giveUpTimer);
+    this.tidy(flight);
+    // Without a URL, openBrowser stops the loopback when MSAL hands it one. After an outcome, it is closed already.
+    const url = flight.url;
+    if (url !== undefined && flight.outcome === undefined) await quietly(() => this.deps.cancel(url));
+  }
+
+  /** Removes what opening the browser left behind, now and for anything that finishes opening later. */
+  private tidy(flight: Flight): void {
+    flight.tidied = true;
+    for (const leftover of flight.leftovers.splice(0)) void quietly(leftover);
   }
 
   private async report(flight: Flight): Promise<LoginStatus> {
