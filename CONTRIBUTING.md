@@ -21,7 +21,7 @@ The tests mock Microsoft Graph and need no account. To try the server against yo
 ## Ground rules
 
 1. **No real mail data, ever.** Not in fixtures, not in issues, not in pull requests. Build test messages and headers by hand, with placeholder senders such as `news@example.com`.
-2. **Safe by default.** Deletion moves to Deleted Items unless `permanent: true` is passed. Bulk actions support `dryRun`. Every tool declares accurate MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) so hosts can auto-approve read-only calls and confirm the rest.
+2. **Safe by default.** Deletion moves to Deleted Items; permanent deletion is only ever done by its own tool, `mail_purge`. Bulk actions are a dry run unless called with `dryRun: false`. Every tool declares accurate MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) so hosts can auto-approve read-only calls and confirm the rest.
 3. **No sending, at all.** Mail-MCP never sends email and never requests the `Mail.Send` permission. A feature that needs it is a discussion for an issue first.
 4. **Least privilege.** A new Graph permission needs a reason in the pull request, and the README's security section and `SCOPES` in [`src/constants.ts`](src/constants.ts) change together.
 5. **Tests first.** Every behavior change comes with a test that fails without it. CI runs on Linux, macOS and Windows with Node 22 and 24.
@@ -44,7 +44,7 @@ Pushing a tag publishes to npm from GitHub Actions, with provenance, and creates
 
 1. Bump the version in `package.json`, in both `version` fields of `server.json`, in `mcpb/manifest.json`, and in the Claude plugin: `version` in `plugin/.claude-plugin/plugin.json` and the pinned package in `plugin/.mcp.json`. Then run `npm install --package-lock-only`, which updates `package-lock.json`. A test checks that all of them agree.
 2. Move the `Unreleased` entries in `CHANGELOG.md` under a `## [X.Y.Z] - date` heading. The release notes are taken from that section.
-3. Commit, then tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin main vX.Y.Z`.
+3. Commit, then tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push --atomic origin main vX.Y.Z`. `--atomic` updates `main` and the tag together or not at all: a tag pushed without `main` would start a release that fails its check that the tagged commit is on `main`.
 4. The **Release** workflow runs four jobs, each with only the permissions it needs:
    - `build` (read-only): checks that the tag matches `package.json`, that the tagged commit is on `main`, and that `CHANGELOG.md` has a non-empty section for the version; installs with `npm ci --ignore-scripts`; runs typecheck, tests and build; then packs the npm tarball, with `package-lock.json` copied in as `npm-shrinkwrap.json`, and the `.mcpb`, and keeps them, with the release notes, as workflow artifacts. It fails if the tarball lacks the shrinkwrap or holds a source map.
    - `attest`: signs a GitHub build attestation for the `.mcpb` and the tarball. It installs and runs nothing from the project.
