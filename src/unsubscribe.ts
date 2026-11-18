@@ -104,7 +104,11 @@ export function parseListUnsubscribe(headers: GraphHeader[] | undefined): Unsubs
   const info: UnsubscribeInfo = { oneClick: false };
   if (!lu) return info;
 
-  for (const entry of splitListUnsubscribe(lu)) {
+  for (const raw of splitListUnsubscribe(lu)) {
+    // A link is shown and used as a URL parser writes it: invisible characters (a bidi override, tag
+    // characters spelling out hidden text) become %-escapes, and the host is in ASCII. The request goes
+    // to that same URL. A link that does not parse is kept as written, and is blocked as not valid.
+    const entry = /^https?:\/\//i.test(raw) && URL.canParse(raw) ? new URL(raw).href : raw;
     if (/^https:\/\//i.test(entry)) {
       if (!info.https || !/^https:\/\//i.test(info.https)) info.https = entry;
     } else if (/^http:\/\//i.test(entry) && !info.https) {

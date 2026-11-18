@@ -450,6 +450,18 @@ describe("MailService.unsubscribe", () => {
     expect(posts.sent[0]?.connectedTo).toEqual(["93.184.215.14"]);
   });
 
+  it("shows and posts to a link as a URL parser writes it: invisible characters as %-escapes", async () => {
+    const { mail, posts } = service(() => message({ "List-Unsubscribe": "<https://X.example/u\u{E0049}\u202E>", "List-Unsubscribe-Post": oneClick }));
+    const r = await mail.unsubscribe("m");
+    expect(r).toMatchObject({ method: "one-click", ok: true, url: "https://x.example/u%F3%A0%81%89%E2%80%AE" });
+    expect(posts.sent.map((s) => `${s.options.hostname}${s.options.path}`)).toEqual(["x.example/u%F3%A0%81%89%E2%80%AE"]);
+  });
+
+  it("hands the browser a link as a URL parser writes it", async () => {
+    const { mail } = service(() => message({ "List-Unsubscribe": "<https://x.example/page\u200B>" }));
+    expect(await mail.unsubscribe("m")).toMatchObject({ method: "browser", url: "https://x.example/page%E2%80%8B" });
+  });
+
   it("blocks a one-click link to a private address: no URL, no mailto link, nothing sent", async () => {
     const { mail, calls, posts } = service(() => message({ "List-Unsubscribe": "<https://192.168.1.1/unsub>, <mailto:stop@x.example>", "List-Unsubscribe-Post": oneClick }));
     const r = await mail.unsubscribe("m");
@@ -663,7 +675,7 @@ describe("MailService cleans what comes from a message", () => {
     expect(r.summary.subject).toBe("Hello Bcc: you");
     expect(r.summary.fromName).toBe("News");
     expect(r.body).toBe("Line one\nLine two[2J");
-    expect(r.to).toEqual(Array.from({ length: 50 }, (_, i) => `r${i}@x.example`));
+    expect(r.to).toEqual(Array.from({ length: 50 }, (_, i) => `r${i}@x.example\uFFFD`));
     expect(r.toTotal).toBe(60);
     expect(r.unsubscribe.mailtoSubject).toBe("Stop");
     expect(r.unsubscribe.mailtoBody).toBe("Please");
@@ -692,11 +704,40 @@ describe("MailService cleans what comes from a message", () => {
     });
     const r = await mail.sendersSummary(undefined, undefined, 10);
     expect(r.senders[0]).toMatchObject({
-      address: "news@x.example",
-      domain: "x.example",
+      address: "news@x.example\uFFFD",
+      domain: "x.example\uFFFD",
       name: ("X News " + "n".repeat(300)).slice(0, 200),
       lastSubject: "Sale ends today",
     });
+  });
+
+  it("sendersSummary keeps a sender disguised by an invisible character apart from the real one", async () => {
+    const { mail } = service((url, init) => {
+      if (url.endsWith("/$batch")) {
+        const reqs = JSON.parse(init.body as string).requests as { id: string }[];
+        return { responses: reqs.map((r) => ({ id: r.id, status: 200, body: { id: r.id, internetMessageHeaders: [] } })) };
+      }
+      if (url.includes("/messages")) {
+        return {
+          value: [
+            { id: "real", subject: "Statement", isRead: true, receivedDateTime: "2026-11-01T00:00:00Z", from: { emailAddress: { address: "alerts@bank.example", name: "Bank" } } },
+            { id: "spoof", subject: "Verify now", isRead: false, receivedDateTime: "2026-11-10T00:00:00Z", from: { emailAddress: { address: "alerts\u200B@bank.example", name: "Bank" } } },
+            { id: "spoof-end", subject: "Verify now", isRead: false, receivedDateTime: "2026-11-09T00:00:00Z", from: { emailAddress: { address: "alerts@bank.example\uFEFF", name: "Bank" } } },
+            { id: "spoof-kelvin", subject: "Verify now", isRead: false, receivedDateTime: "2026-11-08T00:00:00Z", from: { emailAddress: { address: "alerts@ban\u212A.example", name: "Bank" } } },
+          ],
+        };
+      }
+      return folders;
+    });
+    const r = await mail.sendersSummary(undefined, undefined, 10);
+    // Each disguise is a row of its own, with its own latest message: an unsubscribe or a bulk action on
+    // the real address never reaches the spoof, and the spoof never stands in for the real sender.
+    expect(r.senders.map((s) => [s.address, s.count, s.lastMessageId])).toEqual([
+      ["alerts\uFFFD@bank.example", 1, "spoof"],
+      ["alerts@bank.example\uFFFD", 1, "spoof-end"],
+      ["alerts@ban\u212A.example", 1, "spoof-kelvin"],
+      ["alerts@bank.example", 1, "real"],
+    ]);
   });
 
   it("listFolders: folder names and paths, which then resolve", async () => {
@@ -717,7 +758,7 @@ describe("MailService cleans what comes from a message", () => {
 
   it("unsubscribe: sender address and subject", async () => {
     const { mail } = service(() => ({ id: "m", subject: "Promo\r\n\u202Eout", from: { emailAddress: { address: "news@x.example\u200B" } }, internetMessageHeaders: [] }));
-    expect(await mail.unsubscribe("m")).toMatchObject({ method: "none", from: "news@x.example", subject: "Promo out" });
+    expect(await mail.unsubscribe("m")).toMatchObject({ method: "none", from: "news@x.example\uFFFD", subject: "Promo out" });
   });
 });
 

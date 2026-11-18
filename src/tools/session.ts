@@ -8,7 +8,8 @@ import { ok, run } from "./shared.js";
 
 export interface SessionService {
   login(): Promise<LoginStatus>;
-  logout(): Promise<{ account?: string }>;
+  /** `notRemoved`: leftover temporary cache files that could not be deleted. */
+  logout(): Promise<{ account?: string; notRemoved?: string[] }>;
 }
 
 /**
@@ -35,7 +36,7 @@ export function createSessionService(): SessionService {
  */
 export function sessionService(
   flow: Pick<LoginFlow, "start" | "cancel">,
-  signOut: () => Promise<{ account?: string }>,
+  signOut: SessionService["logout"],
 ): SessionService {
   return {
     login: () => flow.start(),
@@ -46,11 +47,22 @@ export function sessionService(
   };
 }
 
-/** The text a logout reports, shared by the mail_logout tool and `mail-mcp logout`. */
-export function logoutDetail(account: string | undefined): string {
+/**
+ * The text a logout reports, shared by the mail_logout tool and `mail-mcp logout`. `notRemoved` lists the
+ * leftover temporary cache files that could not be deleted: the text names them, since they may hold a token.
+ */
+export function logoutDetail(account: string | undefined, notRemoved: readonly string[] = []): string {
+  const revoke = `To ${account === undefined ? "" : "also "}withdraw Mail-MCP's access on Microsoft's side, the user can open ${CONSENT_URL}.`;
+  if (notRemoved.length === 0) {
+    return account === undefined ? `No account was signed in. ${revoke}` : `Signed out of ${account}. The local sign-in was removed. ${revoke}`;
+  }
+  const one = notRemoved.length === 1;
+  const leftover =
+    `${one ? "a temporary file" : `${notRemoved.length} temporary files`} that an interrupted save left, which may hold a token, ` +
+    `could not be deleted: ${notRemoved.join(", ")}. Ask the user to delete ${one ? "it" : "them"}.`;
   return account === undefined
-    ? `No account was signed in. To withdraw Mail-MCP's access on Microsoft's side, the user can open ${CONSENT_URL}.`
-    : `Signed out of ${account}. The local sign-in was removed. To also withdraw Mail-MCP's access on Microsoft's side, the user can open ${CONSENT_URL}.`;
+    ? `No account was signed in, but ${leftover} ${revoke}`
+    : `Signed out of ${account}. The sign-in cache file was removed, but ${leftover} ${revoke}`;
 }
 
 export function registerSessionTools(server: McpServer, session: SessionService): void {
@@ -105,8 +117,8 @@ export function registerSessionTools(server: McpServer, session: SessionService)
     },
     async () =>
       run(async () => {
-        const { account } = await session.logout();
-        const detail = logoutDetail(account);
+        const { account, notRemoved } = await session.logout();
+        const detail = logoutDetail(account, notRemoved);
         return ok(
           detail,
           account === undefined

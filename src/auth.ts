@@ -142,17 +142,18 @@ async function replaceFile(path: string, data: string): Promise<void> {
  * Deletes the temporary files that a save cut short by a crash left next to the cache file: they hold tokens.
  * Only regular files in the cache's own folder whose name is the cache file's name plus exactly replaceFile()'s
  * suffix, and at least minAgeMs old. A symlink or a folder is never touched, and unlink never follows a link.
- * Best effort: never throws.
+ * Never throws: returns the files it found but could not check or delete (one already gone is not one of them).
  */
-async function removeTempFiles(path: string, minAgeMs: number): Promise<void> {
+async function removeTempFiles(path: string, minAgeMs: number): Promise<string[]> {
   const folder = dirname(path);
   const cacheName = basename(path);
   let names: string[];
   try {
     names = await readdir(folder);
   } catch {
-    return;
+    return [];
   }
+  const notRemoved: string[] = [];
   for (const name of names) {
     if (!name.startsWith(cacheName) || !TEMP_SUFFIX.test(name.slice(cacheName.length))) continue;
     const file = join(folder, name);
@@ -160,10 +161,11 @@ async function removeTempFiles(path: string, minAgeMs: number): Promise<void> {
       const info = await lstat(file);
       if (!info.isFile() || Date.now() - info.mtimeMs < minAgeMs) continue;
       await unlink(file);
-    } catch {
-      // Gone already, or not removable: leave it.
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") notRemoved.push(file);
     }
   }
+  return notRemoved;
 }
 
 /** rename(), retried briefly on Windows, which refuses to replace a file another program (an antivirus scan, a backup) holds open. */
@@ -237,10 +239,12 @@ export async function signedInAccount(): Promise<string | undefined> {
 
 /**
  * Removes every account from the MSAL cache, deletes the cache file and any temporary file a crashed save left
- * next to it, so no token stays on disk. Returns the account that was there, if any.
+ * next to it, so no token stays on disk. Returns the account that was there, if any, and in `notRemoved` the
+ * temporary files that could not be deleted, if any: they may hold a token.
  */
-export async function logout(): Promise<{ account?: string }> {
+export async function logout(): Promise<{ account?: string; notRemoved?: string[] }> {
   let account: string | undefined;
+  let notRemoved: string[] = [];
   try {
     const cache = getClient().getTokenCache();
     const accounts = await cache.getAllAccounts();
@@ -251,9 +255,9 @@ export async function logout(): Promise<{ account?: string }> {
     resetClient();
     const path = cachePath();
     await rm(path, { force: true });
-    await removeTempFiles(path, 0);
+    notRemoved = await removeTempFiles(path, 0);
   }
-  return account === undefined ? {} : { account };
+  return { ...(account === undefined ? {} : { account }), ...(notRemoved.length > 0 ? { notRemoved } : {}) };
 }
 
 /** Interactive login through the system browser (auth code + PKCE, localhost loopback). */

@@ -521,3 +521,36 @@ describe("buildMailtoUrl", () => {
     expect(info.mailto).toBeUndefined();
   });
 });
+
+describe("parseListUnsubscribe gives each link as a URL parser writes it", () => {
+  it("turns invisible characters in a link into %-escapes, so none reaches a tool result", () => {
+    const tags = [..."IGNORE"].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join("");
+    const info = parseListUnsubscribe([
+      { name: "List-Unsubscribe", value: `<https://News.Example/u?id=1${tags}\u202E>` },
+      { name: "List-Unsubscribe-Post", value: "List-Unsubscribe=One-Click" },
+    ]);
+    expect(info.https).toBe("https://news.example/u?id=1%F3%A0%81%89%F3%A0%81%87%F3%A0%81%8E%F3%A0%81%8F%F3%A0%81%92%F3%A0%81%85%E2%80%AE");
+    expect(info.oneClick).toBe(true);
+  });
+
+  it("escapes them in the path, the fragment and the user name too, and writes the host in ASCII", () => {
+    const link = (value: string) => parseListUnsubscribe([{ name: "List-Unsubscribe", value: `<${value}>` }]).https;
+    expect(link("https://news.example/u\u200Bx")).toBe("https://news.example/u%E2%80%8Bx");
+    expect(link("https://news.example/u#\u202Ex")).toBe("https://news.example/u#%E2%80%AEx");
+    expect(link("https://a\u{E0041}@news.example/u")).toBe("https://a%F3%A0%81%81@news.example/u");
+    expect(link("https://news.example/u\uFE0F\u3164")).toBe("https://news.example/u%EF%B8%8F%E3%85%A4");
+    expect(link("https://b\u00FCcher.example/u")).toBe("https://xn--bcher-kva.example/u");
+    expect(link("http://news.example/u\u{E0041}")).toBe("http://news.example/u%F3%A0%81%81");
+  });
+
+  it("keeps a link the parser refuses as written: it is blocked as not valid, so it is never shown", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<https://ne\u202Ews.example/u>" }]);
+    expect(info.https).toBe("https://ne\u202Ews.example/u");
+    expect(checkUnsubscribeLinkWithoutLookup(info.https!)).toEqual({ reason: "unverifiable", why: "the URL is not valid" });
+  });
+
+  it("keeps an ordinary link as it is", () => {
+    const info = parseListUnsubscribe([{ name: "List-Unsubscribe", value: "<https://news.example/u?id=1&t=abc>" }]);
+    expect(info.https).toBe("https://news.example/u?id=1&t=abc");
+  });
+});

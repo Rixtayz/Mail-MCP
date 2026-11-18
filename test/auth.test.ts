@@ -14,7 +14,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +35,7 @@ import {
 // or see how it was called. Every other call passes through.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, mkdir: vi.fn(actual.mkdir), writeFile: vi.fn(actual.writeFile), rename: vi.fn(actual.rename) };
+  return { ...actual, mkdir: vi.fn(actual.mkdir), writeFile: vi.fn(actual.writeFile), rename: vi.fn(actual.rename), unlink: vi.fn(actual.unlink) };
 });
 
 const POSIX = process.platform !== "win32";
@@ -544,6 +544,37 @@ describe("with a token cache file", () => {
       leftovers.plant(dir);
       expect(await logout()).toEqual({});
       expect(readdirSync(dir).sort()).toEqual([...leftovers.NOT_OURS].sort());
+    });
+
+    /** Runs `body` while unlink() fails with `code` on the STALE leftover, and works as usual on anything else. */
+    async function withStaleUnlinkFailing(code: string, body: () => Promise<void>): Promise<void> {
+      const real = (await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")).unlink;
+      vi.mocked(unlink).mockImplementation(async (file) => {
+        if (String(file).endsWith(leftovers.STALE)) throw Object.assign(new Error(`${code}: cannot unlink`), { code });
+        return real(file);
+      });
+      try {
+        await body();
+      } finally {
+        vi.mocked(unlink).mockImplementation(real);
+      }
+    }
+
+    it("says which leftover temporary file it could not delete", async () => {
+      writeFileSync(path, cacheFor(BUILT_IN));
+      leftovers.plant(dir);
+      await withStaleUnlinkFailing("EBUSY", async () => {
+        expect(await logout()).toEqual({ account: "a@outlook.com", notRemoved: [join(dir, leftovers.STALE)] });
+      });
+      expect(existsSync(path)).toBe(false);
+      expect(readdirSync(dir).sort()).toEqual([leftovers.STALE, ...leftovers.NOT_OURS].sort());
+    });
+
+    it("does not report a leftover that is already gone", async () => {
+      leftovers.plant(dir);
+      await withStaleUnlinkFailing("ENOENT", async () => {
+        expect(await logout()).toEqual({});
+      });
     });
 
     it.skipIf(!POSIX)("leaves a symlink named like a temporary file alone, and its target too", async () => {
