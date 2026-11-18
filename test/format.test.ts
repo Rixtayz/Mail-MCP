@@ -710,6 +710,23 @@ describe("bodyToText reads a -webkit- alias of a hiding property as the property
   });
 });
 
+describe("bodyToText keeps a table cell of zero width hidden", () => {
+  // Chrome clips these: a cell with max-width:0 gets no width in a table that fits its content, and
+  // a floated, positioned or flex-item cell is a plain box. Whether a cell shows depends on layout.
+  const P = "padding:0;white-space:nowrap;";
+  it.each([
+    ["a td with max-width:0, in a table that fits its content", `<table><tr><td style="${P}max-width:0;overflow:hidden;text-overflow:ellipsis">SECRET</td><td>x</td></tr></table>`],
+    ["a th with max-width:0", `<table><tr><th style="${P}max-width:0;overflow:hidden">SECRET</th></tr></table>`],
+    ["a floated td", `<table><tr><td style="${P}width:0;overflow:hidden;float:left">SECRET</td></tr></table>`],
+    ["an absolutely positioned td", `<table><tr><td style="${P}width:0;overflow:hidden;position:absolute">SECRET</td></tr></table>`],
+    ["a td in a flex row", `<table><tr style="display:flex"><td style="${P}width:0;overflow:hidden">SECRET</td></tr></table>`],
+    ["a td whose content has no width", `<table><tr><td style="${P}width:0;overflow:hidden"><span style="display:inline-block;width:0">SECRET</span></td></tr></table>`],
+    ["a div displayed as a table cell", `<div style="display:table"><div style="display:table-cell;max-width:0;overflow:hidden">SECRET</div></div>`],
+  ])("%s", (_label, body) => {
+    expect(html(`<p>Hi</p>${body}`)).not.toContain("SECRET");
+  });
+});
+
 describe("bodyToText reads an email whose head is never closed", () => {
   it("shows what follows the head's own elements, as a browser does, and still drops the title", () => {
     expect(html("<html><head><title>SECRET</title><p>Hello</p></html>")).toBe("Hello");
