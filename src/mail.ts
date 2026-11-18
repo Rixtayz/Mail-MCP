@@ -1,9 +1,10 @@
 import { PAGE_SIZE_SCAN } from "./constants.js";
 import {
-  ADDRESS_MAX,
   bodyToText,
+  lowerAscii,
   NAME_MAX,
   RECIPIENTS_MAX,
+  sanitizeAddress,
   sanitizeLine,
   SUBJECT_MAX,
   summarizeMessage,
@@ -288,7 +289,7 @@ export class MailService {
       `/me/messages/${pathSegment(id)}?$select=${LIST_SELECT},toRecipients,hasAttachments,body,internetMessageHeaders,webLink`,
       );
     const { text, truncated } = truncate(bodyToText(m.body));
-    const to = (m.toRecipients ?? []).map((r) => sanitizeLine(r.emailAddress?.address ?? "", ADDRESS_MAX)).filter(Boolean);
+    const to = (m.toRecipients ?? []).map((r) => sanitizeAddress(r.emailAddress?.address ?? "")).filter(Boolean);
     return {
       summary: summarizeMessage(m),
       to: to.slice(0, RECIPIENTS_MAX),
@@ -338,7 +339,7 @@ export class MailService {
           break;
         }
         scanned++;
-        const address = sanitizeLine(m.from?.emailAddress?.address?.toLowerCase() ?? "", ADDRESS_MAX);
+        const address = sanitizeAddress(lowerAscii(m.from?.emailAddress?.address ?? ""));
         if (!address) continue;
         const name = m.from?.emailAddress?.name;
         const received = m.receivedDateTime ?? "";
@@ -465,7 +466,7 @@ export class MailService {
   async unsubscribe(id: string): Promise<UnsubscribeOutcome> {
     const m = await this.graph.get<GraphMessage>(`/me/messages/${pathSegment(id)}?$select=id,subject,from,internetMessageHeaders`);
     const info = parseListUnsubscribe(m.internetMessageHeaders);
-    const base = { from: sanitizeLine(m.from?.emailAddress?.address ?? "", ADDRESS_MAX), subject: sanitizeLine(m.subject ?? "", SUBJECT_MAX) };
+    const base = { from: sanitizeAddress(m.from?.emailAddress?.address ?? ""), subject: sanitizeLine(m.subject ?? "", SUBJECT_MAX) };
 
     // A link is only ever POSTed to or handed to the browser once its host is known to be public.
     // A link to a non-public host, or one that cannot be checked, blocks everything, the mailto link

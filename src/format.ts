@@ -80,12 +80,33 @@ export function sanitizeText(text: string): string {
 }
 
 /**
- * One-line text from a message, such as a subject, a name, an address or a folder name: invisible
+ * One-line text from a message, such as a subject, a name or a folder name: invisible
  * and control characters removed, each run of tabs and line breaks turned into one space, trimmed,
  * cut to at most `max` characters.
  */
 export function sanitizeLine(text: string, max = Number.POSITIVE_INFINITY): string {
   return cut(text.replace(INVISIBLE, "").replace(CONTROLS_BUT_BREAKS, "").replace(BREAKS, " ").trim(), max);
+}
+
+/** What an address may not hold: invisible characters, blank fillers, control characters and line breaks. */
+const NOT_IN_ADDRESS = new RegExp(`${INVISIBLE.source}|[\\u115F\\u1160\\u2800\\u3164\\uFFA0\\p{Cc}\\u2028\\u2029]`, "gu");
+
+/**
+ * An email address from a message: each character that would make it read as another address (an
+ * invisible character, a blank filler, a control character or a line break) becomes U+FFFD, at
+ * either end too, so `alerts\u200B@bank.example` stays an address of its own, visibly marked, instead of becoming
+ * alerts@bank.example. Spaces at either end are trimmed. Cut to at most `max` characters.
+ */
+export function sanitizeAddress(text: string, max = ADDRESS_MAX): string {
+  return cut(text.replace(NOT_IN_ADDRESS, REPLACEMENT_CHARACTER).replace(/^ +| +$/g, ""), max);
+}
+
+/**
+ * `text` with its ASCII letters in lower case, and nothing else changed. toLowerCase() would turn
+ * the Kelvin sign into a `k`, so that an address spelled with it would become the real one.
+ */
+export function lowerAscii(text: string): string {
+  return text.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
 }
 
 /** A message preview: sanitized, without the blanks newsletters pad it with, whitespace collapsed, at most `max` characters. */
@@ -104,7 +125,7 @@ export function cleanPreview(text: string, max = 200): string {
 export function summarizeMessage(m: GraphMessage): MessageSummary {
   return {
     id: m.id,
-    from: sanitizeLine(m.from?.emailAddress?.address?.toLowerCase() ?? "", ADDRESS_MAX),
+    from: sanitizeAddress(lowerAscii(m.from?.emailAddress?.address ?? "")),
     fromName: sanitizeLine(m.from?.emailAddress?.name ?? "", NAME_MAX),
     subject: sanitizeLine(m.subject ?? "(no subject)", SUBJECT_MAX),
     receivedDateTime: m.receivedDateTime ?? "",
