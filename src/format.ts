@@ -133,7 +133,7 @@ const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "scrip
 //
 // Hiding is looked for twice: in the declarations as CSS splits them, and by name. The scan by
 // name runs on the style with its CSS escapes decoded: wherever a property that can hide content
-// is named, not as the end of a longer name, and
+// is named (a -webkit- alias counts as the property), not as the end of a longer name, and
 // followed, after whitespace and comments, by a colon, what follows is read as its value, up to
 // the next `;`, `{` or `}`, comments removed (a comment may hold a `;`). It ignores the quotes,
 // url(), brackets, comments and at-rules around the name, so nothing the CSS split might misread
@@ -148,9 +148,10 @@ const HIDDEN_ELEMENTS = new Set(["head", "title", "template", "noscript", "scrip
 // trimmed, any case folded.
 //
 // Showing again (a later declaration of the same property, or a visible font size under a zero
-// size) counts only from a declaration as CSS splits it, written in plain ASCII (a quoted family
-// name in the font shorthand aside) without a backslash, whose whole value matches a short
-// allowlist exactly, the way CSS reads it: only ASCII whitespace trimmed, only ASCII case folded.
+// size) counts only from a declaration as CSS splits it, of the property itself (a -webkit- alias
+// never shows content again), written in plain ASCII (a quoted family name in the font shorthand
+// aside) without a backslash, whose whole value matches a short allowlist exactly, the way CSS
+// reads it: only ASCII whitespace trimmed, only ASCII case folded.
 // Nor does any declaration count once the split meets something it cannot place the way CSS does:
 // a backslash, a line break in a quoted string, a closing bracket that does not match the block
 // it is in, a `}` that closes none, or an at-rule (CSS may end one at its {} block). Anything else
@@ -476,7 +477,7 @@ function commentMaps(text: string): CommentMaps {
 }
 
 /** A property that can hide content, by name, in any ASCII case; scanDeclarations checks that no name character comes before it. */
-const HIDING_NAME = /display|visibility|opacity|max-height|height|max-width|width|overflow-[xy]|overflow|font-size|font|transform|scale|zoom|all/gi;
+const HIDING_NAME = /(?:-webkit-)?(?:display|visibility|opacity|max-height|height|max-width|width|overflow-[xy]|overflow|font-size|font|transform|scale|zoom|all)/gi;
 /** What ends a value for the scan. */
 const VALUE_END = /[;{}]/g;
 /**
@@ -522,6 +523,7 @@ function scanDeclarations(style: string): ScannedDeclaration[] {
   const plain = !maps && !rawAt; // offsets in `text` are offsets in the style
   const found: ScannedDeclaration[] = [];
   const colons: number[] = [];
+  let aliases: Set<number> | undefined; // the ones found under a -webkit- name, which the CSS split does not read
   HIDING_NAME.lastIndex = 0;
   let c = 0; // the first comment in `ignored` that may still hold a name found
   for (let m = HIDING_NAME.exec(text); m; m = HIDING_NAME.exec(text)) {
@@ -533,7 +535,13 @@ function scanDeclarations(style: string): ScannedDeclaration[] {
     if (maps) colon = maps.next[colon]!;
     else while (colon < n && isSpace(text.charCodeAt(colon))) colon++;
     if (text[colon] !== ":") continue;
-    found.push({ at, end: -1, property: m[0].toLowerCase(), value: "", failClosed: false });
+    // A -webkit- alias is the property itself to a browser.
+    let property = m[0].toLowerCase();
+    if (property.startsWith("-webkit-")) {
+      (aliases ??= new Set()).add(found.length);
+      property = property.slice("-webkit-".length);
+    }
+    found.push({ at, end: -1, property, value: "", failClosed: false });
     colons.push(colon);
   }
   let end = 0; // without comments: the first `;`, `{` or `}` after the colon last read
@@ -549,7 +557,7 @@ function scanDeclarations(style: string): ScannedDeclaration[] {
       const next = found[k + 1]?.at ?? n;
       cut = next < end;
       declaration.value = text.slice(colon + 1, Math.min(next, end));
-      if (plain) declaration.end = Math.min(next, end);
+      if (plain && !aliases?.has(k)) declaration.end = Math.min(next, end);
     } else {
       const parts: string[] = [];
       let length = 0;
