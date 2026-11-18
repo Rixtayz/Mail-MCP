@@ -2,7 +2,7 @@ import { PublicClientApplication, type INetworkModule, type NetworkResponse } fr
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, relative } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AUTHORITY, DEFAULT_CLIENT_ID, SCOPES } from "../src/constants.js";
 import { openSignInPage, writeSignInPage } from "../src/login.js";
 import { LoginFlow, cancelLoopback, type LoginDeps } from "../src/session.js";
@@ -12,6 +12,16 @@ const URL_A =
   "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A50123";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Resolves once the give-up timer has fired and cancelled the sign-in (the flow has let go of it by then),
+ * then lets every callback already queued run, the sign-in's own end included when the cancel ends it.
+ * Waits on the event itself, not on a fixed delay: a loaded CI runner can fire the timer late.
+ */
+async function givenUp(d: { cancelled: string[] }): Promise<void> {
+  await vi.waitFor(() => expect(d.cancelled).toEqual([URL_A]), { timeout: 2000 });
+  await new Promise<void>((r) => setImmediate(r));
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -143,8 +153,7 @@ describe("LoginFlow", () => {
     });
     const flow = new LoginFlow(d);
     await flow.start();
-    await sleep(120);
-    expect(d.cancelled).toEqual([URL_A]);
+    await givenUp(d);
     await flow.start();
     expect(d.loginCalls).toBe(2);
   });
@@ -157,7 +166,7 @@ describe("LoginFlow", () => {
     });
     const flow = new LoginFlow(d);
     await flow.start();
-    await sleep(120);
+    await givenUp(d);
     expect(await flow.start()).toEqual({ status: "pending", url: URL_A });
     expect(d.opened).toEqual([URL_A, URL_A]);
   });
@@ -182,7 +191,7 @@ describe("LoginFlow", () => {
     });
     const flow = new LoginFlow(d);
     await flow.start();
-    await sleep(120);
+    await givenUp(d);
     expect(await flow.start()).toEqual({ status: "pending", url: URL_A });
     expect(d.loginCalls).toBe(2);
   });
@@ -227,8 +236,7 @@ describe("LoginFlow and the sign-in page the browser was opened on", () => {
     });
     await new LoginFlow(d).start();
     expect(p.removed).toBe(0);
-    await sleep(120);
-    expect(p.removed).toBe(1);
+    await vi.waitFor(() => expect(p.removed).toBe(1), { timeout: 2000 });
   });
 
   it("removes it once, however the sign-in ends", async () => {
@@ -240,7 +248,7 @@ describe("LoginFlow and the sign-in page the browser was opened on", () => {
       cancel: async () => { gate.reject(new Error("login_timeout")); },
     });
     await new LoginFlow(d).start();
-    await sleep(120); // given up, then ended by the cancel
+    await givenUp(d); // given up, then ended by the cancel
     expect(p.removed).toBe(1);
   });
 
