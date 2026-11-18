@@ -155,19 +155,20 @@ describe("mail_senders_summary over the wire", () => {
     await close();
   });
 
-  it("says when the summary is partial: the folder holds more than the 50,000 messages one call scans", async () => {
+  it("says when the summary is partial: the folder holds more than the 50,000 messages one call scans; counts read 50,000", async () => {
     const senders = [sender("news@x.example", { oneClick: false })];
-    const mail = { sendersSummary: async () => ({ scanned: 50_000, totalSenders: 1, partial: true, senders }) } as unknown as MailService;
+    const mail = { sendersSummary: async () => ({ scanned: 50_000, totalSenders: 12_345, partial: true, senders }) } as unknown as MailService;
     const { request, close } = await connect(fakeSession(), mail);
     const tool = (await listTools(request)).get("mail_senders_summary");
     expect(tool?.outputSchema.properties.partial.type).toBe("boolean");
-    expect(tool?.description).toContain("at most 50,000 messages");
+    expect(tool?.description).toContain("Scans a folder (Inbox by default, up to 50,000 messages)");
+    expect(tool?.description).not.toContain("whole folder");
     const res = await request("tools/call", { name: "mail_senders_summary", arguments: {} });
     expect(res.result?.isError).toBeFalsy();
-    expect(res.result?.structuredContent).toMatchObject({ scanned: 50_000, totalSenders: 1, partial: true });
+    expect(res.result?.structuredContent).toMatchObject({ scanned: 50_000, totalSenders: 12_345, partial: true });
     expect((res.result?.content[0].text as string).split("\n")[0]).toBe(
-      "50000 messages scanned, 1 senders. Partial: the folder holds more than 50,000 messages, the most one call scans, " +
-        "so counts are lower bounds and some senders are missing. Pass `since` to scan a shorter period. Top 1:",
+      "50,000 messages scanned, 12,345 senders. Partial: the folder holds more than 50,000 messages, the most one call scans, " +
+        "so counts are lower bounds and some senders may be missing. Pass `since` to scan a shorter period. Top 1:",
     );
     await close();
   });
